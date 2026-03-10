@@ -232,6 +232,16 @@ public class ShinyShellNavigator(
         return await tcs.Task.ConfigureAwait(false);
     }
     
+    public async Task<string?> Action(string? title, string cancelText = "Cancel", string destructionText = "Remove", params string[] buttons)
+    {
+        var tcs = new TaskCompletionSource<string?>();
+        await dispatcher.DispatchAsync(async () =>
+        {
+            var result = await Shell.Current.DisplayActionSheetAsync(title, cancelText, destructionText, buttons);
+            tcs.SetResult(result);
+        });
+        return await tcs.Task.ConfigureAwait(false);
+    }
     
     void AppOnDescendantAdded(object? sender, ElementEventArgs args)
     {

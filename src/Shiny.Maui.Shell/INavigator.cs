@@ -110,4 +110,17 @@ public interface INavigator
     /// <returns>A task that represents the asynchronous operation. The task result is <see langword="true"/> if the user 
     /// selects the confirmation button; otherwise, <see langword="false"/>.</returns>
     Task<bool> Confirm(string? title, string message, string acceptText = "Yes", string cancelText = "No");
+    
+    /// <summary>
+    /// Displays an action sheet dialog, allowing the user to choose from several options.
+    /// </summary>
+    /// <remarks>Action sheets are used to provide a set of choices related to a specific task or context. 
+    /// On iOS, the <paramref name="destructionText"/> button will automatically appear in red.</remarks>
+    /// <param name="title">The title of the action sheet. Can be <see langword="null"/> to omit the title.</param>
+    /// <param name="cancelText">The text for the cancel button. Defaults to "Cancel" if not specified.</param>
+    /// <param name="destructionText">The text for the destruction button (e.g., Delete). Defaults to "Remove" if not specified.</param>
+    /// <param name="buttons">An array of additional option buttons for the user to select.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result is the text of the button 
+    /// selected by the user; otherwise, <see langword="null"/> if the operation was dismissed.</returns>
+    Task<string?> Action(string? title, string cancelText = "Cancel", string destructionText = "Remove", params string[] buttons);
 }
