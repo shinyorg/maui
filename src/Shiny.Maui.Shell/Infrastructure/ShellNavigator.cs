@@ -214,7 +214,7 @@ public class ShinyShellNavigator(
         var tcs = new TaskCompletionSource();
         await dispatcher.DispatchAsync(async () =>
         {
-            await Shell.Current.DisplayAlert(title, message, acceptText);
+            await Shell.Current.DisplayAlertAsync(title, message, acceptText);
             tcs.SetResult();
         });
         await tcs.Task;
@@ -226,7 +226,7 @@ public class ShinyShellNavigator(
         var tcs = new TaskCompletionSource<bool>();
         await dispatcher.DispatchAsync(async () =>
         {
-            var result = await Shell.Current.DisplayAlert(title, message, acceptText, cancelText);
+            var result = await Shell.Current.DisplayAlertAsync(title, message, acceptText, cancelText);
             tcs.SetResult(result);
         });
         return await tcs.Task.ConfigureAwait(false);
