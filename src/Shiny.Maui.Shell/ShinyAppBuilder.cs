@@ -41,6 +41,26 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
 
 
     /// <summary>
+    /// Enables CarPlay support with consumer-provided navigator and dialog implementations.
+    /// When a CarPlay session connects, INavigator and IDialogs will automatically delegate to these types.
+    /// </summary>
+    /// <typeparam name="TNavigator">The CarPlay navigator implementation</typeparam>
+    /// <typeparam name="TDialogs">The CarPlay dialogs implementation</typeparam>
+    public ShinyAppBuilder UseCarPlay<TNavigator, TDialogs>()
+        where TNavigator : class, INavigator
+        where TDialogs : class, IDialogs
+    {
+        this.CarPlayRegistration = new CarPlayRegistration(typeof(TNavigator), typeof(TDialogs));
+        builder.Services.AddSingleton<TNavigator>();
+        builder.Services.AddSingleton<TDialogs>();
+        builder.Services.AddSingleton(this.CarPlayRegistration);
+        return this;
+    }
+
+    internal CarPlayRegistration? CarPlayRegistration { get; private set; }
+
+
+    /// <summary>
     /// Gets the ViewModel type for a given page type
     /// </summary>
     /// <param name="page"></param>

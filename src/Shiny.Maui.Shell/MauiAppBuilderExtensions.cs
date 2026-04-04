@@ -9,21 +9,37 @@ public static class MauiAppBuilderExtensions
         var navBuilder = new ShinyAppBuilder(builder);
         navBuilderAction.Invoke(navBuilder);
         navBuilder.RegisterDependencies();
-        
+
         if (!builder.Services.Any(x => x.ImplementationType == typeof(ShinyShellNavigator)))
         {
             builder.Services.AddSingleton<ShellServices>();
             builder.Services.AddSingleton<ShinyShellNavigator>();
-            builder.Services.AddSingleton<INavigator>(
-                sp => sp.GetRequiredService<ShinyShellNavigator>()
-            );
             builder.Services.AddSingleton<IMauiInitializeService>(
                 sp => sp.GetRequiredService<ShinyShellNavigator>()
             );
-            builder.Services.TryAddSingleton<IDialogs, ShellDialogs>();
+
+            if (navBuilder.CarPlayRegistration != null)
+            {
+                builder.Services.AddSingleton<ShellDialogs>();
+#if IOS
+                builder.Services.AddSingleton<ICarPlayContext, CarPlayContext>();
+#else
+                builder.Services.AddSingleton<ICarPlayContext, NullCarPlayContext>();
+#endif
+                builder.Services.AddSingleton<INavigator, ProxyNavigator>();
+                builder.Services.AddSingleton<IDialogs, ProxyDialogs>();
+            }
+            else
+            {
+                builder.Services.AddSingleton<INavigator>(
+                    sp => sp.GetRequiredService<ShinyShellNavigator>()
+                );
+                builder.Services.TryAddSingleton<IDialogs, ShellDialogs>();
+            }
+
             builder.Services.AddSingleton(navBuilder);
         }
-        
+
         return builder;
     }
 }

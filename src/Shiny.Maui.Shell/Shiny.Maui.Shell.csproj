@@ -1,11 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFrameworks>net10.0;net10.0-ios</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <RootNamespace>Shiny</RootNamespace>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">16.0</SupportedOSPlatformVersion>
     </PropertyGroup>
+
+    <!-- Exclude Platforms/iOS files from non-iOS builds -->
+    <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'ios'">
+        <Compile Remove="Platforms\iOS\**" />
+    </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="All" />
@@ -16,11 +22,11 @@
         <None Include="..\Shiny.Maui.Shell.SourceGenerators\build\Package.targets"
               Pack="True"
               PackagePath="build/Shiny.Maui.Shell.SourceGenerators.targets" />
-    
+
         <None Include="..\Shiny.Maui.Shell.SourceGenerators\build\Package.targets"
               Pack="True"
               PackagePath="buildTransitive/Shiny.Maui.Shell.SourceGenerators.targets" />
-    
+
         <None Include="..\Shiny.Maui.Shell.SourceGenerators\bin\Release\netstandard2.0\Shiny.Maui.Shell.SourceGenerators.dll"
               Pack="true"
               PackagePath="analyzers/dotnet/cs"
