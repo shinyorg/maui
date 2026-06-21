@@ -3,6 +3,7 @@
         "path": "MauiShell.slnx",
         "projects": [
             "src\\Shiny.Maui.Shell\\Shiny.Maui.Shell.csproj",
+            "src\\Shiny.Maui.Shell.ShinyDialogs\\Shiny.Maui.Shell.ShinyDialogs.csproj",
             "src\\Shiny.Maui.Shell.UxDiversDialogs\\Shiny.Maui.Shell.UxDiversDialogs.csproj",
             "src\\Shiny.Maui.Shell.SourceGenerators\\Shiny.Maui.Shell.SourceGenerators.csproj"
         ]

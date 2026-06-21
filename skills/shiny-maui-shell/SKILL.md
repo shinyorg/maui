@@ -20,6 +20,9 @@ triggers:
   - ShellProperty
   - UseShinyShell
   - UseDialogs
+  - UseShinyDialogs
+  - ShinyDialogs
+  - UseUxDiversDialogs
   - ShinyShell
   - ShellServices
   - ShinyAppBuilder
@@ -164,6 +167,21 @@ builder
 ```
 
 `UseDialogs<TDialog>()` replaces the default `ShellDialogs` provider. The default registration uses `TryAddSingleton`, so a `UseDialogs<>` call always wins.
+
+**Built-in alternative providers** (same `IDialogs` interface — no ViewModel changes):
+```csharp
+// Owned, animated, themeable dialogs via Shiny.Maui.Controls (package: Shiny.Maui.Shell.ShinyDialogs)
+builder
+    .UseMauiApp<App>()
+    .UseShinyControls()                  // registers the Controls IDialogService
+    .UseShinyShell(x => x.AddGeneratedMaps().UseShinyDialogs());
+
+// Styled UXDivers popups (package: Shiny.Maui.Shell.UxDiversDialogs)
+builder
+    .UseMauiApp<App>()
+    .UseUxDiversDialogs()                 // initialize UXDivers popup infrastructure
+    .UseShinyShell(x => x.AddGeneratedMaps().UseUxDiversDialogs());
+```
 
 ### 3. AppShell must inherit from `ShinyShell`
 

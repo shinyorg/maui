@@ -10,7 +10,7 @@
         <PackageVersion Include="Microsoft.Maui.Controls" Version="$(MauiVersion)"/>
         <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0"/>
         <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2"/>
-        <PackageVersion Include="Shiny.Maui.Controls" Version="1.0.1-beta-0040"/>
+        <PackageVersion Include="Shiny.Maui.Controls" Version="1.0.1-beta-0127"/>
         <PackageVersion Include="UXDivers.Popups.Maui" Version="0.9.4"/>
         <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0"/>
     </ItemGroup>

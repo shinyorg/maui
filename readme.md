@@ -37,7 +37,9 @@ Inspired by [Prism Library](https://prismlibrary.com) by Dan Siegel and Brian La
 
 > Thread-safe — dispatches to UI thread automatically. Inject separately from `INavigator` for clean separation of concerns.
 >
-> **Alternative provider:** Use `Shiny.Maui.Shell.UxDiversDialogs` for styled popup dialogs powered by [UXDivers Popups](https://github.com/uxdivers/uxd-popups) — same `IDialogs` interface, no ViewModel changes needed.
+> **Alternative providers (same `IDialogs` interface, no ViewModel changes needed):**
+> - `Shiny.Maui.Shell.ShinyDialogs` — owned, animated, themeable dialogs powered by [Shiny.Maui.Controls](https://shinylib.net/controls/dialogs/) (never the native alert/prompt; identical across platforms).
+> - `Shiny.Maui.Shell.UxDiversDialogs` — styled popup dialogs powered by [UXDivers Popups](https://github.com/uxdivers/uxd-popups).
 
 ### 📡 Navigation Events
 
@@ -289,7 +291,28 @@ public class MyViewModel(IDialogs dialogs)
 }
 ```
 
-### 6. UxDivers Dialogs (Optional)
+### 6. Shiny Controls Dialogs (Optional)
+
+Replace the default native dialogs with the owned, animated, themeable dialog service from [Shiny.Maui.Controls](https://shinylib.net/controls/dialogs/). The dialog is always rendered by the library, so it looks identical across platforms:
+
+```bash
+dotnet add package Shiny.Maui.Shell.ShinyDialogs
+```
+
+Configure in `MauiProgram.cs` — `UseShinyControls()` registers the underlying `IDialogService`, and `UseShinyDialogs()` routes `IDialogs` through it:
+```csharp
+builder
+    .UseMauiApp<App>()
+    .UseShinyControls()             // registers the Shiny.Maui.Controls IDialogService
+    .UseShinyShell(x => x
+        .UseShinyDialogs()          // route IDialogs through the Controls dialog service
+        .AddGeneratedMaps()
+    )
+```
+
+Your ViewModels continue using `IDialogs` as before — only the visual presentation changes.
+
+### 7. UxDivers Dialogs (Optional)
 
 Replace the default platform dialogs with styled popups from [UXDivers Popups](https://github.com/uxdivers/uxd-popups):
 

@@ -13,6 +13,7 @@
         <File Path="Directory.packages.props" />
     </Folder>
     <Project Path="Sample\Sample.csproj" />
+    <Project Path="src\Shiny.Maui.Shell.ShinyDialogs\Shiny.Maui.Shell.ShinyDialogs.csproj" />
     <Project Path="src\Shiny.Maui.Shell.UxDiversDialogs\Shiny.Maui.Shell.UxDiversDialogs.csproj" />
     <Project Path="src\Shiny.Maui.Shell.SourceGenerators\Shiny.Maui.Shell.SourceGenerators.csproj" />
     <Project Path="src\Shiny.Maui.Shell\Shiny.Maui.Shell.csproj" />
