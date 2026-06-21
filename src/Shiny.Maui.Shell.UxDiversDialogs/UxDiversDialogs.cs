@@ -1,3 +1,4 @@
+using UXDivers.Popups;
 using UXDivers.Popups.Maui.Controls;
 using UXDivers.Popups.Services;
 using Shiny.Infrastructure;
@@ -22,6 +23,12 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                 }),
                 ShowSecondaryActionButton = false
             };
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult();
+            }
+            popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             await tcs.Task;
         });
@@ -48,6 +55,12 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                     tcs.TrySetResult(false);
                 })
             };
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult(false);
+            }
+            popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             return await tcs.Task;
         });
@@ -89,6 +102,12 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                 tcs.TrySetResult(null);
             })
         };
+        void OnPopupClosed(object? sender, PopupEventArgs e)
+        {
+            popup.PopupClosed -= OnPopupClosed;
+            tcs.TrySetResult(null);
+        }
+        popup.PopupClosed += OnPopupClosed;
         await IPopupService.Current.PushAsync(popup);
         return await tcs.Task;
     });
@@ -142,6 +161,12 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                 });
             }
 
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult(cancel ?? string.Empty);
+            }
+            popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             return await tcs.Task;
         });
