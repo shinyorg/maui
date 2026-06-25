@@ -7,27 +7,34 @@ namespace Shiny;
 
 public class UxDiversDialogs(IMainThread mainThread) : IDialogs
 {
+    // NOTE: PopupServiceCore raises PopupClosed *inside* PopAsync (before its task completes).
+    // Each action command must therefore unsubscribe OnPopupClosed before popping and resolve
+    // the result itself; OnPopupClosed only handles dismissal without a selection
+    // (tap-outside / back button), where it falls back to the cancel/default value.
+
     public Task Alert(string? title, string message, string acceptText = "OK")
         => mainThread.InvokeOnMainThreadAsync(async () =>
         {
             var tcs = new TaskCompletionSource();
-            var popup = new SimpleActionPopup
+            SimpleActionPopup popup = null!;
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult();
+            }
+            popup = new SimpleActionPopup
             {
                 Title = title ?? string.Empty,
                 Text = message,
                 ActionButtonText = acceptText,
                 ActionButtonCommand = new Command(async () =>
                 {
+                    popup.PopupClosed -= OnPopupClosed;
                     await IPopupService.Current.PopAsync();
                     tcs.TrySetResult();
                 }),
                 ShowSecondaryActionButton = false
             };
-            void OnPopupClosed(object? sender, PopupEventArgs e)
-            {
-                popup.PopupClosed -= OnPopupClosed;
-                tcs.TrySetResult();
-            }
             popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             await tcs.Task;
@@ -38,28 +45,31 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
         => mainThread.InvokeOnMainThreadAsync(async () =>
         {
             var tcs = new TaskCompletionSource<bool>();
-            var popup = new SimpleActionPopup
+            SimpleActionPopup popup = null!;
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult(false);
+            }
+            popup = new SimpleActionPopup
             {
                 Title = title ?? string.Empty,
                 Text = message,
                 ActionButtonText = acceptText,
                 ActionButtonCommand = new Command(async () =>
                 {
+                    popup.PopupClosed -= OnPopupClosed;
                     await IPopupService.Current.PopAsync();
                     tcs.TrySetResult(true);
                 }),
                 SecondaryActionButtonText = cancelText,
                 SecondaryActionButtonCommand = new Command(async () =>
                 {
+                    popup.PopupClosed -= OnPopupClosed;
                     await IPopupService.Current.PopAsync();
                     tcs.TrySetResult(false);
                 })
             };
-            void OnPopupClosed(object? sender, PopupEventArgs e)
-            {
-                popup.PopupClosed -= OnPopupClosed;
-                tcs.TrySetResult(false);
-            }
             popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             return await tcs.Task;
@@ -83,7 +93,13 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
             Value = initialValue
         };
         var tcs = new TaskCompletionSource<string?>();
-        var popup = new FormPopup
+        FormPopup popup = null!;
+        void OnPopupClosed(object? sender, PopupEventArgs e)
+        {
+            popup.PopupClosed -= OnPopupClosed;
+            tcs.TrySetResult(null);
+        }
+        popup = new FormPopup
         {
             Title = title ?? string.Empty,
             Text = message,
@@ -91,6 +107,7 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
             ActionButtonText = acceptText,
             ActionButtonCommand = new Command(async () =>
             {
+                popup.PopupClosed -= OnPopupClosed;
                 var result = field.Value;
                 await IPopupService.Current.PopAsync();
                 tcs.TrySetResult(result);
@@ -98,15 +115,11 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
             SecondaryActionLinkText = cancelText,
             SecondaryActionLinkCommand = new Command(async () =>
             {
+                popup.PopupClosed -= OnPopupClosed;
                 await IPopupService.Current.PopAsync();
                 tcs.TrySetResult(null);
             })
         };
-        void OnPopupClosed(object? sender, PopupEventArgs e)
-        {
-            popup.PopupClosed -= OnPopupClosed;
-            tcs.TrySetResult(null);
-        }
         popup.PopupClosed += OnPopupClosed;
         await IPopupService.Current.PushAsync(popup);
         return await tcs.Task;
@@ -118,6 +131,13 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
         {
             var tcs = new TaskCompletionSource<string>();
             var items = new List<OptionSheetItem>();
+            OptionSheetPopup popup = null!;
+
+            void OnPopupClosed(object? sender, PopupEventArgs e)
+            {
+                popup.PopupClosed -= OnPopupClosed;
+                tcs.TrySetResult(cancel ?? string.Empty);
+            }
 
             foreach (var button in buttons)
             {
@@ -126,6 +146,7 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                     Text = button,
                     Command = new Command(async () =>
                     {
+                        popup.PopupClosed -= OnPopupClosed;
                         await IPopupService.Current.PopAsync();
                         tcs.TrySetResult(button);
                     })
@@ -140,13 +161,14 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
                     IconColor = Colors.Red,
                     Command = new Command(async () =>
                     {
+                        popup.PopupClosed -= OnPopupClosed;
                         await IPopupService.Current.PopAsync();
                         tcs.TrySetResult(destruction);
                     })
                 });
             }
 
-            var popup = new OptionSheetPopup
+            popup = new OptionSheetPopup
             {
                 Title = title ?? string.Empty,
                 Items = items
@@ -156,16 +178,12 @@ public class UxDiversDialogs(IMainThread mainThread) : IDialogs
             {
                 popup.CloseButtonCommand = new Command(async () =>
                 {
+                    popup.PopupClosed -= OnPopupClosed;
                     await IPopupService.Current.PopAsync();
                     tcs.TrySetResult(cancel);
                 });
             }
 
-            void OnPopupClosed(object? sender, PopupEventArgs e)
-            {
-                popup.PopupClosed -= OnPopupClosed;
-                tcs.TrySetResult(cancel ?? string.Empty);
-            }
             popup.PopupClosed += OnPopupClosed;
             await IPopupService.Current.PushAsync(popup);
             return await tcs.Task;
