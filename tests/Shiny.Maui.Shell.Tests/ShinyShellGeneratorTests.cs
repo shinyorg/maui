@@ -277,6 +277,30 @@ namespace TestApp
         result.Diagnostics.ShouldContain(d => d.Id == "SHINY002");
     }
 
+    [Fact]
+    public void NavExtensions_Enabled_DoesNotReportDisabledDiagnostic()
+    {
+        // SHINY002 signals that AddGeneratedMaps was skipped because nav extensions are disabled.
+        // With nav extensions on (the default) and AI extensions off (also the default), it must
+        // NOT fire — AddGeneratedMaps is generated.
+        var source = StubTypes + @"
+
+namespace TestApp
+{
+    public class HomePage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<HomePage>(""Dashboard"")]
+    public class HomeViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+}";
+        var result = RunGenerator(source);
+
+        GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs").ShouldNotBeNull();
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY002");
+    }
+
     #endregion
 
     #region Navigation Extension Method Naming

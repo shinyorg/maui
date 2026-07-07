@@ -423,11 +423,6 @@ public class ShinyShellGenerator : IIncrementalGenerator
             GenerateNavigationExtensions(context, filtered);
             GenerateNavigationBuilderNavExtensions(context, filtered);
         }
-
-        if (options.GenerateAiExtensions && hasAiPackage)
-        {
-            GenerateAiExtensions(context, filtered, options);
-        }
         else
         {
             context.ReportDiagnostic(Diagnostic.Create(
@@ -435,6 +430,11 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 Location.None,
                 filtered.Length
             ));
+        }
+
+        if (options.GenerateAiExtensions && hasAiPackage)
+        {
+            GenerateAiExtensions(context, filtered, options);
         }
 
         // Generate Routes class only if enabled
