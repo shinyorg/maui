@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:SampleNav"
+             xmlns:shiny="clr-namespace:Shiny;assembly=Shiny.Maui.Navigation"
+             x:DataType="local:GuardedViewModel"
+             x:Class="SampleNav.GuardedPage"
+             Title="Guarded">
+
+    <VerticalStackLayout Padding="20" Spacing="10">
+        <Label Text="This page has unsaved changes and will ask before letting you leave." />
+        <Switch IsToggled="{Binding HasUnsavedChanges}" />
+        <Label Text="{Binding HasUnsavedChanges, StringFormat='Unsaved changes: {0}'}" />
+        <Button Text="Back (runs the guard)" shiny:Navigate.Action="GoBack" />
+    </VerticalStackLayout>
+</ContentPage>

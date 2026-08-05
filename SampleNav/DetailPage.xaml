@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:SampleNav"
+             xmlns:shiny="clr-namespace:Shiny;assembly=Shiny.Maui.Navigation"
+             x:DataType="local:DetailViewModel"
+             x:Class="SampleNav.DetailPage"
+             Title="Detail">
+
+    <VerticalStackLayout Padding="20" Spacing="10">
+        <Label Text="{Binding OrderId, StringFormat='Order {0}'}" FontSize="20" />
+        <Label Text="The OrderId arrived through the configure callback - it was already set before this page existed."
+               FontSize="12"
+               TextColor="Gray" />
+        <Button Text="Push another Detail" Command="{Binding PushMore}" />
+        <Button Text="Back" shiny:Navigate.Action="GoBack" />
+        <Button Text="Pop to root" shiny:Navigate.Action="PopToRoot" />
+    </VerticalStackLayout>
+</ContentPage>

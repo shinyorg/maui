@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:SampleNav"
+             xmlns:shiny="clr-namespace:Shiny;assembly=Shiny.Maui.Navigation"
+             x:DataType="local:MenuViewModel"
+             x:Class="SampleNav.MenuPage"
+             Title="Shiny Nav">
+
+    <VerticalStackLayout Padding="20" Spacing="10">
+        <Label Text="Menu" FontSize="20" FontAttributes="Bold" />
+
+        <!-- Tab mode switches tabs; Root mode restarts the active tab's stack -->
+        <Button Text="Home" shiny:Navigate.ViewModel="{x:Type local:HomeViewModel}" shiny:Navigate.Mode="Tab" />
+        <Button Text="Inbox" shiny:Navigate.ViewModel="{x:Type local:InboxViewModel}" shiny:Navigate.Mode="Tab" />
+        <Button Text="Settings" shiny:Navigate.ViewModel="{x:Type local:SettingsViewModel}" shiny:Navigate.Mode="Tab" />
+        <BoxView HeightRequest="1" Color="Gray" />
+        <Button Text="Detail as new root"
+                shiny:Navigate.ViewModel="{x:Type local:DetailViewModel}"
+                shiny:Navigate.Mode="Root" />
+    </VerticalStackLayout>
+</ContentPage>

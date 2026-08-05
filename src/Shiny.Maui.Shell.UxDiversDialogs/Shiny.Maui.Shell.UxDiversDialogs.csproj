@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>$(BaseTargetFramework)</TargetFramework>
@@ -10,7 +10,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\Shiny.Maui.Shell\Shiny.Maui.Shell.csproj" />
+        <ProjectReference Include="..\Shiny.Maui.Core\Shiny.Maui.Core.csproj" />
     </ItemGroup>
 
 </Project>

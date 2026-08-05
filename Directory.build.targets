@@ -3,6 +3,15 @@
         <PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="All" />
         
         <None Include="$(MSBuildThisFileDirectory)nuget.png" Pack="true" PackagePath="icon.png" />
-        <None Include="$(MSBuildThisFileDirectory)readme.md" Pack="true" PackagePath="\" />
+        <!-- A project with its own readme.md (Shiny.Maui.Navigation) packs that instead of the repo root one -->
+        <None Include="$(MSBuildThisFileDirectory)readme.md"
+              Pack="true"
+              PackagePath="\"
+              Condition="!Exists('$(MSBuildProjectDirectory)/readme.md')" />
+
+        <None Include="$(MSBuildProjectDirectory)/readme.md"
+              Pack="true"
+              PackagePath="\"
+              Condition="Exists('$(MSBuildProjectDirectory)/readme.md')" />
     </ItemGroup>
 </Project>

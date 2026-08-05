@@ -1,7 +1,7 @@
 {
   "name": "shiny-maui-shell",
   "version": "1.0.0",
-  "description": "Claude Code plugin for Shiny MAUI Shell - enhanced .NET MAUI Shell navigation with ViewModel lifecycle management, source generation, and strong-typed navigation",
+  "description": "Claude Code plugin for Shiny MAUI Shell and Shiny MAUI Navigation - ViewModel-first .NET MAUI navigation with lifecycle management, tabs, flyouts, dialogs, and (Shell only) source-generated routes",
   "author": {
     "name": "Shiny",
     "email": "hello@shinylib.net",
@@ -20,7 +20,11 @@
     "source-generators",
     "xaml",
     "mobile",
-    "cross-platform"
+    "cross-platform",
+    "tabs",
+    "flyout",
+    "tabbedpage",
+    "flyoutpage"
   ],
   "skills": "./skills/"
 }

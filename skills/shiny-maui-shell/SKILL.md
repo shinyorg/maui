@@ -73,6 +73,14 @@ triggers:
 
 You are an expert in Shiny MAUI Shell, a library that enhances .NET MAUI Shell with ViewModel lifecycle management, navigation services, source generation, tab badges, and XAML-triggered navigation.
 
+> [!IMPORTANT]
+> **Check the package reference first.** There is a sibling library, `Shiny.Maui.Navigation`,
+> that provides the same ideas *without* Shell — no routes, no URIs, no source generation.
+> If the project references `Shiny.Maui.Navigation` (markers: `UseShinyNavigation`,
+> `App : ShinyApplication`, `AddTabs`, `AddFlyout`), stop and use the
+> `shiny-maui-navigation` skill instead. The two libraries are mutually exclusive; do not
+> emit `[ShellMap]`, `Routes.*`, or URI navigation into a `Shiny.Maui.Navigation` project.
+
 ## When to Use This Skill
 
 Invoke this skill when the user wants to:

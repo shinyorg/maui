@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:SampleNav"
+             xmlns:shiny="clr-namespace:Shiny;assembly=Shiny.Maui.Navigation"
+             x:DataType="local:HomeViewModel"
+             x:Class="SampleNav.HomePage"
+             Title="Home">
+
+    <ContentPage.ToolbarItems>
+        <ToolbarItem Text="Menu" shiny:Navigate.Action="ToggleFlyout" />
+    </ContentPage.ToolbarItems>
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="12">
+            <Label Text="ViewModel-first navigation, no Shell"
+                   FontSize="18"
+                   FontAttributes="Bold" />
+
+            <Label Text="Push - typed configure callback carries the data" FontSize="12" TextColor="Gray" />
+            <Button Text="Push Detail (Order 42)" Command="{Binding PushDetail}" />
+
+            <Label Text="XAML - no command on the ViewModel at all" FontSize="12" TextColor="Gray" />
+            <Button Text="Push Detail from XAML"
+                    shiny:Navigate.ViewModel="{x:Type local:DetailViewModel}" />
+            <Button Text="Modal from XAML"
+                    shiny:Navigate.ViewModel="{x:Type local:ModalViewModel}"
+                    shiny:Navigate.Mode="Modal" />
+            <Button Text="Jump to Inbox tab"
+                    shiny:Navigate.ViewModel="{x:Type local:InboxViewModel}"
+                    shiny:Navigate.Mode="Tab" />
+
+            <Label Text="Builder - three pages, one animation" FontSize="12" TextColor="Gray" />
+            <Button Text="Push Detail -> Detail -> Guarded" Command="{Binding PushChain}" />
+
+            <Label Text="Guard - the ViewModel can refuse to be left" FontSize="12" TextColor="Gray" />
+            <Button Text="Push Guarded Page" Command="{Binding PushGuarded}" />
+
+            <Label Text="Badges" FontSize="12" TextColor="Gray" />
+            <Button Text="Badge Inbox (3)" Command="{Binding BadgeInbox}" />
+            <Button Text="Clear Inbox Badge" Command="{Binding ClearInboxBadge}" />
+
+            <Label Text="Root swapping" FontSize="12" TextColor="Gray" />
+            <Button Text="Switch to Login root" Command="{Binding GoLogin}" />
+
+            <Label Text="Dialogs" FontSize="12" TextColor="Gray" />
+            <Button Text="Confirm" Command="{Binding ShowConfirm}" />
+            <Label Text="{Binding LastResult}" FontSize="12" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

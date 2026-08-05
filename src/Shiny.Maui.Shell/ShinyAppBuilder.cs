@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace Shiny;
 
 
-public sealed class ShinyAppBuilder(MauiAppBuilder builder)
+public sealed class ShinyAppBuilder(MauiAppBuilder builder) : IShinyBuilder
 {
     public MauiAppBuilder MauiBuilder => builder;
     
@@ -42,6 +42,11 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
         builder.Services.AddSingleton<IDialogs, TDialog>();
         return this;
     }
+
+
+    void IShinyBuilder.UseDialogs<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TDialog
+    >() => this.UseDialogs<TDialog>();
 
 
     /// <summary>

@@ -8,7 +8,7 @@
     {
       "name": "shiny-maui-shell",
       "source": "./",
-      "description": "Claude Code plugin for Shiny MAUI Shell - enhanced .NET MAUI Shell navigation with ViewModel lifecycle management, source generation, and strong-typed navigation"
+      "description": "Claude Code plugin for Shiny MAUI Shell and Shiny MAUI Navigation - ViewModel-first .NET MAUI navigation with lifecycle management, tabs, flyouts, dialogs, and (Shell only) source-generated routes"
     }
   ]
 }

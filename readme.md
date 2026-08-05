@@ -8,6 +8,30 @@ Inspired by [Prism Library](https://prismlibrary.com) by Dan Siegel and Brian La
 
 [Full Documentation](https://shinylib.net/maui)
 
+> [!TIP]
+> **Don't want Shell?** [`Shiny.Maui.Navigation`](https://www.nuget.org/packages/Shiny.Maui.Navigation)
+> (in this same repo, under `src/Shiny.Maui.Navigation`) gives you the same ideas —
+> ViewModel-first navigation, tabs, flyouts, lifecycle, dialogs — built on plain
+> `NavigationPage` / `TabbedPage` / `FlyoutPage`, with no routes, no URIs, and no source
+> generator. See the comparison table below.
+
+---
+
+## Which package?
+
+| | `Shiny.Maui.Shell` | `Shiny.Maui.Navigation` |
+|:---|:---|:---|
+| Built on | .NET MAUI Shell | `NavigationPage` / `TabbedPage` / `FlyoutPage` |
+| Targets | Route strings + URIs, or ViewModel types | ViewModel types only |
+| Parameters | `configure` callback **and** string-keyed args | `configure` callback |
+| Source generator | Yes — `Routes.*`, `NavigateToDetail(…)` | No |
+| Deep links | URI-native | Call `NavigateTo<T>` yourself |
+| Structure declared in | `AppShell.xaml` | `MauiProgram.cs` |
+
+Both share `Shiny.Maui.Core` (`IDialogs`, `IPageLifecycleAware`, `INavigationConfirmation`,
+`IMainThread`), so the dialog provider packages work with either one. Pick one — they are
+alternatives, not companions.
+
 ---
 
 ## Features

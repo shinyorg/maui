@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFrameworks>$(BaseTargetFramework);$(BaseTargetFramework)-android;$(BaseTargetFramework)-ios;$(BaseTargetFramework)-maccatalyst</TargetFrameworks>
@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Maui.Controls" />
+        <ProjectReference Include="..\Shiny.Maui.Core\Shiny.Maui.Core.csproj" />
     </ItemGroup>
 
     <ItemGroup>

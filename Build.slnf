@@ -2,6 +2,8 @@
     "solution": {
         "path": "MauiShell.slnx",
         "projects": [
+            "src\\Shiny.Maui.Core\\Shiny.Maui.Core.csproj",
+            "src\\Shiny.Maui.Navigation\\Shiny.Maui.Navigation.csproj",
             "src\\Shiny.Maui.Shell\\Shiny.Maui.Shell.csproj",
             "src\\Shiny.Maui.Shell.ShinyDialogs\\Shiny.Maui.Shell.ShinyDialogs.csproj",
             "src\\Shiny.Maui.Shell.UxDiversDialogs\\Shiny.Maui.Shell.UxDiversDialogs.csproj",
