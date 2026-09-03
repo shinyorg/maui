@@ -194,6 +194,77 @@ public partial class {Name}ViewModel(INavigator navigator) : ObservableObject,
 }
 ```
 
+## Dialog Page Template (awaits a typed result)
+
+Use this instead of the modal template when the page exists to collect a value from the user. No
+`Shell.PresentationMode` is needed — `ShowDialog` presents it modally.
+
+### XAML
+```xml
+<!-- Views/{Name}Page.xaml -->
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="{Namespace}.Views.{Name}Page"
+             Title="{Binding Title}">
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16">
+        <Label Text="{Binding Title}" FontSize="24" FontAttributes="Bold" />
+
+        <ScrollView Grid.Row="1">
+            <!-- selection UI here -->
+        </ScrollView>
+
+        <HorizontalStackLayout Grid.Row="2" Spacing="12" HorizontalOptions="End">
+            <Button Text="Cancel" Command="{Binding CancelCommand}" />
+            <Button Text="OK" Command="{Binding AcceptCommand}" />
+        </HorizontalStackLayout>
+    </Grid>
+</ContentPage>
+```
+
+### ViewModel
+```csharp
+// ViewModels/{Name}ViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Shiny;
+
+namespace {Namespace}.ViewModels;
+
+[ShellMap<{Name}Page>("{route}")]
+public partial class {Name}ViewModel : ObservableObject, IDialogAware<{TResult}>
+{
+    public event EventHandler<{TResult}>? Completed;
+    public event EventHandler? Cancelled;
+
+    [ObservableProperty]
+    string title = "{Dialog Title}";
+
+    [ShellProperty("{parameter description}", required: false)]
+    public {TResult} Initial { get; set; }
+
+    [ObservableProperty]
+    {TResult} selected;
+
+    [RelayCommand]
+    void Accept() => this.Completed?.Invoke(this, this.Selected);
+
+    [RelayCommand]
+    void Cancel() => this.Cancelled?.Invoke(this, EventArgs.Empty);
+}
+```
+
+### Call site
+```csharp
+// generated from [ShellMap] + IDialogAware<T> - no type arguments needed
+var result = await navigator.Show{route}Dialog(initial: someValue);
+
+if (result.TryGetValue(out var value))
+{
+    // user accepted
+}
+```
+
 ## Navigation Builder Usage Template
 
 Pages used in builder chains must be globally registered (`registerRoute: true`, the default). Do NOT use `registerRoute: false` or declare them as `ShellContent` in XAML.

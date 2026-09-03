@@ -48,6 +48,13 @@ triggers:
   - Confirm
   - Prompt
   - ActionSheet
+  - IDialogAware
+  - DialogResult
+  - IDialogPresenter
+  - ShowDialog
+  - UseDialogPresenter
+  - viewmodel dialog
+  - dialog result
   - NavigationEventArgs
   - NavigatedEventArgs
   - Navigate.Route
@@ -506,6 +513,77 @@ public class MyViewModel(INavigator navigator, IDialogs dialogs)
 }
 ```
 
+### 6a. ViewModel Dialogs (awaiting a typed result from a page)
+
+Use `IDialogs` for alert / confirm / prompt / action sheet. When the dialog needs real UI — a picker,
+a filter sheet, a form — build a normal Page + ViewModel pair, have the ViewModel implement
+`IDialogAware<T>`, and await it with the generated `Show{Route}Dialog` extension.
+
+**ViewModel** — implement `IDialogAware<T>` with two events. Do NOT introduce a base class; the
+ViewModel's base slot belongs to `ObservableObject`.
+
+```csharp
+[ShellMap<PickColorPage>("PickColor")]
+public partial class PickColorViewModel : ObservableObject, IDialogAware<string>
+{
+    public event EventHandler<string>? Completed;
+    public event EventHandler? Cancelled;
+
+    [ShellProperty("The colour to pre-select", required: false)]
+    public string Preset { get; set; } = "Red";
+
+    [RelayCommand] void Pick(string colour) => this.Completed?.Invoke(this, colour);
+    [RelayCommand] void Cancel() => this.Cancelled?.Invoke(this, EventArgs.Empty);
+}
+```
+
+**Call site** — always prefer the generated extension. It infers both type arguments and turns
+`[ShellProperty]` values into method parameters:
+
+```csharp
+var result = await navigator.ShowPickColorDialog(preset: "Violet");
+
+if (result.TryGetValue(out var colour))
+    this.Selected = colour;
+
+// or, with a fallback
+this.Selected = result.ValueOr("Red");
+```
+
+The underlying method needs both type arguments spelled out, because C# cannot infer a type argument
+from a constraint — only reach for it when there is no `[ShellMap]` on the ViewModel:
+
+```csharp
+var result = await navigator.ShowDialog<PickColorViewModel, string>(x => x.Preset = "Violet");
+```
+
+**Rules:**
+- The dialog ViewModel must be mapped to a page, exactly like a navigable ViewModel — `[ShellMap<TPage>]`
+  + `AddGeneratedMaps()`, or `ShinyAppBuilder.Add<TPage, TViewModel>()`. It throws otherwise.
+- `DialogResult<T>` — check `IsCancelled`, or use `TryGetValue(out var v)` / `ValueOr(fallback)`.
+  Never assume `Value` is meaningful without checking; `default(T)` cannot represent cancellation for
+  value types.
+- User dismissal (hardware back, iOS swipe-down) returns a cancelled `DialogResult<T>`. The passed
+  `CancellationToken` firing throws `OperationCanceledException` — these are different things.
+- The dialog page does NOT need `Shell.PresentationMode="Modal"` — the presenter pushes it modally.
+- Lifecycle: `IPageLifecycleAware.OnAppearing`/`OnDisappearing` and `IDisposable.Dispose` all fire on
+  the dialog ViewModel, and the page underneath gets `OnDisappearing` when the dialog opens and
+  `OnAppearing` when it closes. `INavigationAware`, `INavigationConfirmation` and the
+  `Navigating`/`Navigated` events are deliberately NOT involved — a dialog is not a stack mutation.
+- The dialog ViewModel is disposed as the page detaches, marginally before `ShowDialog` returns. The
+  returned `DialogResult<T>` is unaffected, but do not use the ViewModel instance after the await.
+
+**Changing presentation** — implement `IDialogPresenter` and register it. The presenter's task must
+complete when the page is gone (user-dismissed *or* `dismiss` fired), and must not throw
+`OperationCanceledException` on `dismiss`:
+
+```csharp
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseDialogPresenter<MyPopupPresenter>()
+);
+```
+
 ### 7. ShellServices Aggregate & IMainThread
 
 `ShellServices` is a convenience record that bundles the three shell services together. Inject it when a ViewModel or service needs most of them and you want a single parameter:
@@ -554,6 +632,9 @@ Set `Shell.PresentationMode="Modal"` on the page XAML:
 
 Navigate to it like any other page. Close with `GoBack()`.
 
+If the modal exists to collect a value from the user, prefer §6a instead — `ShowDialog` presents it
+modally for you and hands back a typed result.
+
 ### 9. File Organization
 
 Place files following standard MAUI conventions:
@@ -563,7 +644,7 @@ Place files following standard MAUI conventions:
 
 ## Source Generation Output
 
-The source generator produces up to three files from `[ShellMap]` and `[ShellProperty]` attributes. Each can be individually disabled via MSBuild properties.
+The source generator produces several files from `[ShellMap]` and `[ShellProperty]` attributes. Each can be individually disabled via MSBuild properties.
 
 ### Routes.g.cs
 The constant name is derived from the `route` parameter (or page type name without `Page` suffix when no route is specified):
@@ -591,6 +672,20 @@ public static class NavigationExtensions
 }
 ```
 
+### DialogExtensions.g.cs
+Only emitted for `[ShellMap]` ViewModels that also implement `IDialogAware<T>`. Not generated at all when there are none, and never added to the AI tool surface:
+```csharp
+public static class DialogExtensions
+{
+    public static Task<DialogResult<string>> ShowPickColorDialog(this INavigator navigator,
+        string preset = null,
+        CancellationToken cancellationToken = default)
+    {
+        return navigator.ShowDialog<PickColorViewModel, string>(x => { x.Preset = preset; }, cancellationToken);
+    }
+}
+```
+
 ### NavigationBuilderExtensions.g.cs
 Uses inline string literals (not `Routes.*` constants), so it works regardless of whether route constants are enabled:
 ```csharp
@@ -614,7 +709,7 @@ Disable individual generated files via MSBuild properties in `.csproj`:
     <!-- Disable Routes.g.cs -->
     <ShinyMauiShell_GenerateRouteConstants>false</ShinyMauiShell_GenerateRouteConstants>
 
-    <!-- Disable NavigationExtensions.g.cs -->
+    <!-- Disable NavigationExtensions.g.cs and DialogExtensions.g.cs -->
     <ShinyMauiShell_GenerateNavExtensions>false</ShinyMauiShell_GenerateNavExtensions>
 
     <!-- Disable AI extensions (enabled by default, requires Microsoft.Extensions.AI) -->

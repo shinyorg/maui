@@ -24,6 +24,9 @@
             <Button Text="Action Sheet"
                     Command="{Binding ShowActionSheetCommand}" />
 
+            <Button Text="ViewModel Dialog (awaits a typed result)"
+                    Command="{Binding ShowViewModelDialogCommand}" />
+
             <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
 
             <Label Text="Last Result" FontAttributes="Bold" FontSize="16" />

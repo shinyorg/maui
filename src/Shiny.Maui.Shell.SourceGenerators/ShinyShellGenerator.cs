@@ -117,7 +117,8 @@ public class ShinyShellGenerator : IIncrementalGenerator
                             registerRoute,
                             description,
                             properties,
-                            attribute.GetLocation()
+                            attribute.GetLocation(),
+                            GetDialogResultType(viewModelSymbol)
                         );
                     }
                 }
@@ -265,6 +266,28 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 firstArg.Expression is LiteralExpressionSyntax firstLiteral &&
                 firstLiteral.Token.IsKind(SyntaxKind.StringLiteralToken))
                 return firstLiteral.Token.ValueText;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the T of Shiny.IDialogAware&lt;T&gt; when the viewmodel implements it, otherwise null.
+    /// Drives the Show{Route}Dialog extension generation.
+    /// </summary>
+    static string? GetDialogResultType(INamedTypeSymbol? viewModelSymbol)
+    {
+        if (viewModelSymbol == null)
+            return null;
+
+        foreach (var iface in viewModelSymbol.AllInterfaces)
+        {
+            if (iface.Name == "IDialogAware" &&
+                iface.IsGenericType &&
+                iface.TypeArguments.Length == 1 &&
+                iface.ContainingNamespace?.ToDisplayString() == "Shiny")
+            {
+                return iface.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            }
         }
         return null;
     }
@@ -422,6 +445,7 @@ public class ShinyShellGenerator : IIncrementalGenerator
             GenerateNavigationBuilderExtensions(context, filtered);
             GenerateNavigationExtensions(context, filtered);
             GenerateNavigationBuilderNavExtensions(context, filtered);
+            GenerateDialogExtensions(context, filtered);
         }
         else
         {
@@ -552,6 +576,91 @@ public class ShinyShellGenerator : IIncrementalGenerator
         sb.AppendLine("}");
         
         context.AddSource("NavigationExtensions.g.cs", sb.ToString());
+    }
+
+    /// <summary>
+    /// Emits a fully-inferred Show{Route}Dialog extension for every ShellMap viewmodel that also
+    /// implements IDialogAware&lt;T&gt;. C# cannot infer type arguments from a constraint, so calling
+    /// INavigator.ShowDialog directly always requires both type arguments spelled out - these
+    /// wrappers close both of them and surface ShellProperty values as method parameters.
+    /// </summary>
+    static void GenerateDialogExtensions(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes)
+    {
+        var dialogs = classes.Where(x => x.DialogResultTypeFullName != null).ToList();
+        if (dialogs.Count == 0)
+            return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("public static class DialogExtensions");
+        sb.AppendLine("{");
+
+        foreach (var cls in dialogs)
+        {
+            var methodName = $"Show{cls.GeneratedName}Dialog";
+            var resultType = cls.DialogResultTypeFullName!;
+            var requiredParams = cls.Properties.Where(p => p.IsRequired).ToList();
+            var optionalParams = cls.Properties.Where(p => !p.IsRequired).ToList();
+
+            sb.AppendLine("    /// <summary>");
+            sb.AppendLine(cls.Description != null
+                ? $"    /// {EscapeXml(cls.Description)}"
+                : $"    /// Presents {EscapeXml(cls.ViewModelName)} as a dialog and awaits its result.");
+            sb.AppendLine("    /// </summary>");
+
+            foreach (var prop in requiredParams.Concat(optionalParams))
+            {
+                var paramDesc = prop.Description != null ? EscapeXml(prop.Description) : "";
+                sb.AppendLine($"    /// <param name=\"{ToCamelCase(prop.Name)}\">{paramDesc}</param>");
+            }
+            sb.AppendLine("    /// <param name=\"cancellationToken\">Dismisses the dialog and throws OperationCanceledException. Distinct from the user cancelling, which returns a cancelled DialogResult.</param>");
+
+            if (cls.Description != null)
+                sb.AppendLine($"    [global::System.ComponentModel.Description(\"{EscapeString(cls.Description)}\")]");
+
+            sb.Append($"    public static global::System.Threading.Tasks.Task<global::Shiny.DialogResult<{resultType}>> {methodName}(this global::Shiny.INavigator navigator");
+
+            foreach (var prop in requiredParams)
+            {
+                if (prop.Description != null)
+                    sb.Append($", [global::System.ComponentModel.Description(\"{EscapeString(prop.Description)}\")] {prop.TypeName} {ToCamelCase(prop.Name)}");
+                else
+                    sb.Append($", {prop.TypeName} {ToCamelCase(prop.Name)}");
+            }
+
+            foreach (var prop in optionalParams)
+            {
+                var defaultValue = GetDefaultValue(prop.TypeName);
+                if (prop.Description != null)
+                    sb.Append($", [global::System.ComponentModel.Description(\"{EscapeString(prop.Description)}\")] {prop.TypeName} {ToCamelCase(prop.Name)} = {defaultValue}");
+                else
+                    sb.Append($", {prop.TypeName} {ToCamelCase(prop.Name)} = {defaultValue}");
+            }
+
+            sb.Append(", global::System.Threading.CancellationToken cancellationToken = default");
+            sb.AppendLine(")");
+            sb.AppendLine("    {");
+
+            if (cls.Properties.Any())
+            {
+                sb.Append($"        return navigator.ShowDialog<{cls.ViewModelFullName}, {resultType}>(x => ");
+                sb.Append("{ ");
+                sb.Append(string.Join("; ", cls.Properties.Select(p => $"x.{p.Name} = {ToCamelCase(p.Name)}")));
+                sb.Append(";");
+                sb.AppendLine(" }, cancellationToken);");
+            }
+            else
+            {
+                sb.AppendLine($"        return navigator.ShowDialog<{cls.ViewModelFullName}, {resultType}>(configure: null, cancellationToken: cancellationToken);");
+            }
+
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("}");
+
+        context.AddSource("DialogExtensions.g.cs", sb.ToString());
     }
 
     static void GenerateNavigationBuilderExtensions(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes)
@@ -967,7 +1076,8 @@ record ShellMapInfo(
     bool RegisterRoute,
     string Description,
     ImmutableArray<ShellPropertyInfo> Properties,
-    Location? AttributeLocation
+    Location? AttributeLocation,
+    string? DialogResultTypeFullName
 );
 
 record ShellPropertyInfo(
