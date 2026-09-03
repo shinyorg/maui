@@ -35,6 +35,10 @@ Inspired by [Prism Library](https://prismlibrary.com) by Dan Siegel and Brian La
 | `Prompt(title, message)` | `Task<string?>` |
 | `ActionSheet(title, cancel, destructive, ...buttons)` | `Task<string>` |
 
+For anything richer than the four primitives above, present one of your own pages as a dialog and
+`await` a typed result from it with `INavigator.ShowDialog<TViewModel, T>` — see
+[ViewModel Dialogs](#8-viewmodel-dialogs).
+
 > Thread-safe — dispatches to UI thread automatically. Inject separately from `INavigator` for clean separation of concerns.
 >
 > **Alternative providers (same `IDialogs` interface, no ViewModel changes needed):**
@@ -342,6 +346,102 @@ builder
 
 Your ViewModels continue using `IDialogs` as before — only the visual presentation changes.
 
+### 8. ViewModel Dialogs
+
+`IDialogs` covers alert / confirm / prompt / action sheet. When you need a *real* UI to collect a
+result — a colour picker, a filter sheet, a signature pad — present one of your own Page/ViewModel
+pairs as a dialog and `await` the value it produces.
+
+The ViewModel implements `IDialogAware<T>` and raises one of two events to close itself:
+
+```csharp
+[ShellMap<PickColorPage>("PickColor")]
+public partial class PickColorViewModel : ObservableObject, IDialogAware<string>
+{
+    public event EventHandler<string>? Completed;
+    public event EventHandler? Cancelled;
+
+    [ShellProperty("The colour to pre-select", required: false)]
+    public string Preset { get; set; } = "Red";
+
+    [RelayCommand] void Pick(string colour) => this.Completed?.Invoke(this, colour);
+    [RelayCommand] void Cancel() => this.Cancelled?.Invoke(this, EventArgs.Empty);
+}
+```
+
+The source generator emits a typed `Show{Route}Dialog` extension for it, so the call site needs no
+type arguments and `[ShellProperty]` values become parameters:
+
+```csharp
+var result = await navigator.ShowPickColorDialog(preset: "Violet");
+
+if (result.TryGetValue(out var colour))
+    this.Selected = colour;
+
+// or
+this.Selected = result.ValueOr("Red");
+```
+
+`DialogResult<T>` exists because `default(T)` cannot express cancellation for value types — a `bool`
+dialog could not otherwise tell "the user chose No" apart from "the user dismissed it".
+
+| Outcome | Result |
+|:--------|:-------|
+| ViewModel raised `Completed` | `IsCancelled == false`, `Value` set |
+| ViewModel raised `Cancelled` | `IsCancelled == true` |
+| User dismissed the dialog (back button, iOS swipe-down) | `IsCancelled == true` |
+| The `CancellationToken` you passed fired | throws `OperationCanceledException` |
+
+**Every dismissal path completes the `await`** — a dialog closed without either event being raised
+reports cancellation rather than hanging.
+
+The underlying method is available directly if you'd rather not use the generated wrapper, though it
+needs both type arguments spelled out (C# cannot infer a type argument from a constraint):
+
+```csharp
+var result = await navigator.ShowDialog<PickColorViewModel, string>(x => x.Preset = "Violet");
+```
+
+The dialog ViewModel must be mapped to a page like any other navigable ViewModel — via `[ShellMap]`
++ `AddGeneratedMaps()` or `ShinyAppBuilder.Add<TPage, TViewModel>()`.
+
+#### Lifecycle
+
+| Hook | Dialog ViewModel | Page underneath |
+|:-----|:-----------------|:----------------|
+| `IPageLifecycleAware.OnAppearing` | ✅ when shown | ✅ when the dialog closes |
+| `IPageLifecycleAware.OnDisappearing` | ✅ when closed | ✅ when the dialog opens |
+| `IDisposable.Dispose` | ✅ when closed | — |
+| `INavigationAware.OnNavigatingFrom` | ❌ not raised | ❌ not raised |
+| `INavigationConfirmation.CanNavigate` | ❌ not consulted | ❌ not consulted |
+| `INavigator.Navigating` / `Navigated` | ❌ not raised | ❌ not raised |
+
+The three that don't fire are deliberate: showing a dialog is not a navigation stack mutation, and an
+"are you sure you want to leave?" guard firing because a dialog opened would be wrong.
+
+The dialog ViewModel is disposed as the page detaches, which happens marginally *before* `ShowDialog`
+returns. The `DialogResult<T>` you get back is captured at the moment the ViewModel raised its event
+and is unaffected — but don't hold on to the ViewModel instance after the await.
+
+#### Changing how dialogs appear
+
+By default the page is pushed onto Shell's modal stack. Swap in your own presentation — a popup, a
+bottom sheet, anything that can host a `Page` — by implementing `IDialogPresenter`:
+
+```csharp
+public class MyPopupPresenter : IDialogPresenter
+{
+    // Show the page; complete the Task once it is gone, either because the user
+    // dismissed it or because `dismiss` fired. Never throw on `dismiss`.
+    public async Task Present(Page page, object viewModel, CancellationToken dismiss) { /* ... */ }
+}
+
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseDialogPresenter<MyPopupPresenter>()
+);
+```
+
 ---
 
 ## Navigation Events
@@ -471,6 +571,26 @@ public static class NavigationBuilderExtensions
     }
 }
 
+// DialogExtensions.g.cs — only for ViewModels that also implement IDialogAware<T>
+public static class DialogExtensions
+{
+    /// <summary>Navigate to the detail page</summary>
+    /// <param name="itemId">The item identifier</param>
+    /// <param name="cancellationToken">Dismisses the dialog and throws OperationCanceledException. Distinct from the user cancelling, which returns a cancelled DialogResult.</param>
+    [Description("Navigate to the detail page")]
+    public static Task<DialogResult<string>> ShowDetailDialog(this INavigator navigator,
+        [Description("The item identifier")] string itemId,
+        [Description("Page number for pagination")] int page = default,
+        CancellationToken cancellationToken = default)
+    {
+        return navigator.ShowDialog<DetailViewModel, string>(x =>
+        {
+            x.ItemId = itemId;
+            x.Page = page;
+        }, cancellationToken);
+    }
+}
+
 // AiExtensions.g.cs — route metadata (always generated)
 public static class AiExtensions
 {
@@ -522,6 +642,9 @@ builder.UseShinyShell(x => x
 // Navigate with generated extension methods - no guesswork
 await navigator.NavigateToDetail("123", page: 2);
 
+// Present a dialog-aware ViewModel and await its typed result - no type arguments needed
+var result = await navigator.ShowPickColorDialog(preset: "Violet");
+
 // Fluent builder with generated extensions
 await navigator.CreateBuilder().AddDetail("123", page: 2).Navigate();
 
@@ -561,7 +684,7 @@ Disable individual generated files via MSBuild properties:
     <!-- Disable Routes.g.cs -->
     <ShinyMauiShell_GenerateRouteConstants>false</ShinyMauiShell_GenerateRouteConstants>
 
-    <!-- Disable NavigationExtensions.g.cs, NavigationBuilderNavExtensions.g.cs, and NavigationBuilderExtensions.g.cs (AddGeneratedMaps) -->
+    <!-- Disable NavigationExtensions.g.cs, NavigationBuilderNavExtensions.g.cs, DialogExtensions.g.cs, and NavigationBuilderExtensions.g.cs (AddGeneratedMaps) -->
     <ShinyMauiShell_GenerateNavExtensions>false</ShinyMauiShell_GenerateNavExtensions>
 
     <!-- Disable AI extensions (enabled by default, requires Microsoft.Extensions.AI) -->
@@ -581,13 +704,15 @@ Disable individual generated files via MSBuild properties:
 | Property | Default | Controls |
 |---|---|---|
 | `ShinyMauiShell_GenerateRouteConstants` | `true` | `Routes.g.cs` |
-| `ShinyMauiShell_GenerateNavExtensions` | `true` | All navigation extensions and `AddGeneratedMaps` |
+| `ShinyMauiShell_GenerateNavExtensions` | `true` | All navigation extensions, `DialogExtensions.g.cs`, and `AddGeneratedMaps` |
 | `ShinyMauiShell_GenerateAiExtensions` | `true` | `AiMauiShellTools` class, `AddAiTools()`, `GetAiToolApplicableGeneratedRoutes`, `NavigateToRoute`, and `Prompt`. Requires `Microsoft.Extensions.AI` package (**SHINY003** error if missing). Set to `false` to disable |
 | `ShinyMauiShell_AiToolsClassName` | `AiMauiShellTools` | Class name for the generated AI tools class |
 | `ShinyMauiShell_AiExtensionsClassName` | `AiExtensions` | Class name for the static route info extensions class |
 | `ShinyMauiShell_AiNavigateMethodName` | `NavigateToRoute` | Method name for the AI-friendly navigate method |
 
 `NavigationBuilderExtensions.g.cs` (`AddGeneratedMaps()`) is only generated when `[ShellMap]` attributes are detected and `ShinyMauiShell_GenerateNavExtensions` is not set to `false`. A **SHINY002** warning is emitted if maps are detected but nav extensions are disabled.
+
+`DialogExtensions.g.cs` is only generated when at least one `[ShellMap]` ViewModel also implements `IDialogAware<T>`. Dialog methods are deliberately excluded from the AI tool surface — an AI agent should be driving navigation, not blocking on a modal awaiting human input.
 
 ---
 

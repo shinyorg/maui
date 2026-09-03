@@ -45,6 +45,22 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
 
 
     /// <summary>
+    /// Sets the presenter used to display dialog ViewModels shown with
+    /// <see cref="INavigator.ShowDialog{TViewModel, T}"/>. Defaults to
+    /// <see cref="ShellModalDialogPresenter"/>, which pushes the page onto Shell's modal stack.
+    /// </summary>
+    /// <typeparam name="TPresenter"></typeparam>
+    /// <returns></returns>
+    public ShinyAppBuilder UseDialogPresenter<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TPresenter
+    >() where TPresenter : class, IDialogPresenter
+    {
+        builder.Services.AddSingleton<IDialogPresenter, TPresenter>();
+        return this;
+    }
+
+
+    /// <summary>
     /// Gets the ViewModel type for a given page type
     /// </summary>
     /// <param name="page"></param>
@@ -72,6 +88,23 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
         {
             if (pair.Value.ViewModelType == viewModelType)
                 return pair.Key;
+        }
+
+        return null;
+    }
+
+
+    /// <summary>
+    /// Gets the Page type mapped to a given ViewModel type
+    /// </summary>
+    /// <param name="viewModelType"></param>
+    /// <returns></returns>
+    public Type? GetPageTypeForViewModel(Type viewModelType)
+    {
+        foreach (var pair in this.typeMap)
+        {
+            if (pair.Value.ViewModelType == viewModelType)
+                return pair.Value.PageType;
         }
 
         return null;

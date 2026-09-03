@@ -44,6 +44,14 @@ public interface INavigator
         params IEnumerable<(string Key, object Value)> args
     );
 
+    // Present the page mapped to TViewModel as a dialog and await its typed result.
+    // TViewModel must be mapped to a page AND implement IDialogAware<T>.
+    // Prefer the generated Show{Route}Dialog extension - it infers both type arguments.
+    Task<DialogResult<T>> ShowDialog<TViewModel, T>(
+        Action<TViewModel>? configure = null,
+        CancellationToken cancellationToken = default
+    ) where TViewModel : class, IDialogAware<T>;
+
     // Pop to the root page, optionally passing arguments
     Task PopToRoot(params IEnumerable<(string Key, object Value)> args);
 
@@ -180,6 +188,100 @@ public class MyViewModel(IDialogs dialogs)
     var action = await dialogs.ActionSheet("Photo", "Cancel", "Delete", "Take Photo", "Choose from Library");
 }
 ```
+
+## ViewModel Dialogs
+
+### IDialogAware\<T\>
+
+Implemented by a ViewModel that can be presented as a dialog and return a value. `out T` is legal
+here because `EventHandler<in TEventArgs>` is contravariant, which puts `T` in a covariant position.
+
+```csharp
+public interface IDialogAware<out T>
+{
+    // Raised by the ViewModel when the user makes a selection
+    event EventHandler<T> Completed;
+
+    // Raised by the ViewModel when the user explicitly cancels
+    event EventHandler Cancelled;
+}
+```
+
+Raise exactly one of the two to close the dialog. Raising more than once is harmless — the first
+wins. There is no base class: a ViewModel's base slot belongs to `ObservableObject`.
+
+### DialogResult\<T\>
+
+```csharp
+public readonly record struct DialogResult<T>(bool IsCancelled, T? Value)
+{
+    static DialogResult<T> Cancel();
+    static DialogResult<T> Complete(T value);
+
+    bool TryGetValue([MaybeNullWhen(false)] out T value);   // false when cancelled
+    T ValueOr(T fallback);
+}
+```
+
+| Outcome | Result |
+|---|---|
+| ViewModel raised `Completed` | `IsCancelled == false`, `Value` set |
+| ViewModel raised `Cancelled` | `IsCancelled == true` |
+| User dismissed (hardware back, iOS swipe-down, tap-outside) | `IsCancelled == true` |
+| The passed `CancellationToken` fired | throws `OperationCanceledException` |
+
+Every dismissal path completes the await — a dialog closed without either event being raised reports
+cancellation rather than hanging.
+
+### Usage Example
+
+```csharp
+[ShellMap<PickColorPage>("PickColor")]
+public partial class PickColorViewModel : ObservableObject, IDialogAware<string>
+{
+    public event EventHandler<string>? Completed;
+    public event EventHandler? Cancelled;
+
+    [ShellProperty("The colour to pre-select", required: false)]
+    public string Preset { get; set; } = "Red";
+
+    [RelayCommand] void Pick(string colour) => this.Completed?.Invoke(this, colour);
+    [RelayCommand] void Cancel() => this.Cancelled?.Invoke(this, EventArgs.Empty);
+}
+
+// call site - generated extension, no type arguments
+var result = await navigator.ShowPickColorDialog(preset: "Violet");
+if (result.TryGetValue(out var colour))
+    this.Selected = colour;
+```
+
+### IDialogPresenter
+
+Controls how the dialog page appears. The default `ShellModalDialogPresenter` pushes it onto Shell's
+modal stack, so the page does **not** need `Shell.PresentationMode="Modal"` in XAML.
+
+```csharp
+public interface IDialogPresenter
+{
+    // Present the page. The returned Task must complete once the page is gone -
+    // whether the user dismissed it, or `dismiss` asked for teardown.
+    // Must NOT throw OperationCanceledException when `dismiss` fires.
+    // Responsible for dispatching to the main thread.
+    Task Present(Page page, object viewModel, CancellationToken dismiss);
+}
+```
+
+Register with `ShinyAppBuilder.UseDialogPresenter<TPresenter>()`.
+
+### Constraints
+- The dialog ViewModel must be mapped to a page (`[ShellMap<TPage>]` + `AddGeneratedMaps()`, or
+  `Add<TPage, TViewModel>()`). `ShowDialog` throws `InvalidOperationException` otherwise.
+- `IPageLifecycleAware.OnAppearing`/`OnDisappearing` and `IDisposable.Dispose` fire on the dialog
+  ViewModel; the page underneath gets `OnDisappearing` on open and `OnAppearing` on close.
+- `INavigationAware`, `INavigationConfirmation`, and `INavigator.Navigating`/`Navigated` are
+  deliberately not involved — showing a dialog is not a navigation stack mutation.
+- The dialog ViewModel is disposed as the page detaches, marginally before `ShowDialog` returns. The
+  returned `DialogResult<T>` is unaffected; do not use the ViewModel instance after the await.
 
 ## Navigation Events
 
@@ -369,6 +471,10 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
     // Registered as a singleton. Call order does not matter — UseDialogs<>
     // always wins over the default ShellDialogs (registered via TryAddSingleton).
     ShinyAppBuilder UseDialogs<TDialog>() where TDialog : class, IDialogs;
+
+    // Replace the default dialog presenter (ShellModalDialogPresenter) used by ShowDialog.
+    // Same registration semantics as UseDialogs.
+    ShinyAppBuilder UseDialogPresenter<TPresenter>() where TPresenter : class, IDialogPresenter;
 }
 ```
 

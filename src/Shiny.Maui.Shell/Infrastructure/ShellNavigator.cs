@@ -202,6 +202,85 @@ public class ShinyShellNavigator(
     }
 
     
+    public async Task<DialogResult<T>> ShowDialog<TViewModel, T>(
+        Action<TViewModel>? configure = null,
+        CancellationToken cancellationToken = default
+    ) where TViewModel : class, IDialogAware<T>
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var pageType = navBuilder.GetPageTypeForViewModel(typeof(TViewModel))
+            ?? throw new InvalidOperationException(
+                $"Could not find a page mapped to viewmodel '{typeof(TViewModel)}'. Dialog viewmodels must be mapped with ShinyAppBuilder.Add<TPage, TViewModel>() or [ShellMap<TPage>] + AddGeneratedMaps()"
+            );
+
+        var vm = (TViewModel)services.GetRequiredService(typeof(TViewModel));
+        var completion = new TaskCompletionSource<DialogResult<T>>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // TrySetResult throughout: the first of the two events wins, so a viewmodel that raises
+        // Completed twice, or raises Cancelled after Completed, cannot corrupt the result.
+        void OnCompleted(object? sender, T value) => completion.TrySetResult(DialogResult<T>.Complete(value));
+        void OnCancelled(object? sender, EventArgs args) => completion.TrySetResult(DialogResult<T>.Cancel());
+
+        // Subscribe before configure so a viewmodel that completes during configuration - or
+        // synchronously from OnAppearing before the presenter's push has been awaited - is captured.
+        vm.Completed += OnCompleted;
+        vm.Cancelled += OnCancelled;
+        try
+        {
+            configure?.Invoke(vm);
+
+            // Resolve and bind the page on the main thread - InitializeComponent is not safe to run
+            // off it. Normal navigation gets this for free because Shell constructs the page itself
+            // inside GoToAsync; here we own the instance so we own the dispatch.
+            var page = await mainThread
+                .InvokeOnMainThreadAsync(() =>
+                {
+                    var resolved = (Page)services.GetRequiredService(pageType);
+                    resolved.BindingContext = vm;
+                    return Task.FromResult(resolved);
+                })
+                .ConfigureAwait(false);
+
+            var presenter = services.GetRequiredService<IDialogPresenter>();
+            using var dismiss = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            logger.LogDebug("[Dialog] Presenting '{type}'", typeof(TViewModel));
+            var presentation = presenter.Present(page, vm, dismiss.Token);
+            var finished = await Task.WhenAny(completion.Task, presentation).ConfigureAwait(false);
+
+            if (finished == presentation)
+            {
+                // The presentation ended without the viewmodel producing a result - the user
+                // dismissed it (back button, swipe-down, tap-outside). Awaiting it first surfaces a
+                // genuine presenter fault instead of silently reporting cancellation.
+                await presentation.ConfigureAwait(false);
+                completion.TrySetResult(DialogResult<T>.Cancel());
+            }
+            else
+            {
+                // The viewmodel produced a result - tell the presenter to tear the dialog down and
+                // wait until it is actually gone before returning to the caller.
+                await dismiss.CancelAsync().ConfigureAwait(false);
+                await presentation.ConfigureAwait(false);
+            }
+
+            // Caller cancellation is an OperationCanceledException, not a cancelled DialogResult -
+            // the two mean different things and callers handle them differently.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var result = await completion.Task.ConfigureAwait(false);
+            logger.LogDebug("[Dialog] '{type}' closed (cancelled: {cancelled})", typeof(TViewModel), result.IsCancelled);
+            return result;
+        }
+        finally
+        {
+            vm.Completed -= OnCompleted;
+            vm.Cancelled -= OnCancelled;
+        }
+    }
+
+
     public Task PopToRoot(params IEnumerable<(string Key, object Value)> args)
     {
         // we already have 1 page covered and we don't want to pop the last page

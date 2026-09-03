@@ -49,7 +49,35 @@ public interface INavigator
         params IEnumerable<(string Key, object Value)> args
     );
 
-    
+
+    /// <summary>
+    /// Presents the page mapped to <typeparamref name="TViewModel"/> as a dialog and asynchronously
+    /// returns the value the ViewModel produces.
+    /// </summary>
+    /// <remarks>
+    /// The ViewModel must implement <see cref="IDialogAware{T}"/> and, like any navigable ViewModel,
+    /// must be mapped to a page - via <c>ShinyAppBuilder.Add&lt;TPage, TViewModel&gt;()</c> or
+    /// <c>[ShellMap&lt;TPage&gt;]</c> + <c>AddGeneratedMaps()</c>.
+    ///
+    /// How the dialog appears is decided by the registered <see cref="IDialogPresenter"/>, which
+    /// defaults to a Shell modal push. Every dismissal path completes the returned task: if the user
+    /// dismisses the dialog without the ViewModel raising either event, the result is a cancellation.
+    ///
+    /// The source generator emits a typed <c>Show{Route}Dialog</c> extension for every dialog-aware
+    /// <c>[ShellMap]</c> ViewModel, which infers both type arguments and surfaces
+    /// <c>[ShellProperty]</c> values as method parameters - prefer that over calling this directly.
+    /// </remarks>
+    /// <typeparam name="TViewModel">The dialog ViewModel type.</typeparam>
+    /// <typeparam name="T">The type of value the dialog returns.</typeparam>
+    /// <param name="configure">An optional action to configure the ViewModel before it is presented.</param>
+    /// <param name="cancellationToken">Dismisses the dialog and throws <see cref="OperationCanceledException"/>. Distinct from the user cancelling, which returns a cancelled <see cref="DialogResult{T}"/>.</param>
+    /// <returns>The value the ViewModel produced, or a cancelled <see cref="DialogResult{T}"/>.</returns>
+    Task<DialogResult<T>> ShowDialog<TViewModel, T>(
+        Action<TViewModel>? configure = null,
+        CancellationToken cancellationToken = default
+    ) where TViewModel : class, IDialogAware<T>;
+
+
     /// <summary>
     /// Returns to the root page regardless of how far up the stack you are
     /// </summary>

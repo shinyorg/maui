@@ -3,7 +3,7 @@ using Shiny;
 namespace Sample;
 
 [ShellMap<DialogDemoPage>]
-public partial class DialogDemoViewModel(IDialogs dialogs) : ObservableObject
+public partial class DialogDemoViewModel(IDialogs dialogs, INavigator navigator) : ObservableObject
 {
     [ObservableProperty] string lastResult = "(none)";
 
@@ -33,5 +33,16 @@ public partial class DialogDemoViewModel(IDialogs dialogs) : ObservableObject
     {
         var result = await dialogs.ActionSheet("Pick an Option", "Cancel", "Delete", "Edit", "Share", "Copy");
         this.LastResult = $"ActionSheet: {result}";
+    }
+
+    // ShowPickColorDialog is source generated from [ShellMap<PickColorPage>] + IDialogAware<string>
+    // on PickColorViewModel - no type arguments, and [ShellProperty] values become parameters
+    [RelayCommand]
+    async Task ShowViewModelDialog()
+    {
+        var result = await navigator.ShowPickColorDialog(preset: "Violet");
+        this.LastResult = result.IsCancelled
+            ? "Colour dialog: (cancelled)"
+            : $"Colour dialog: {result.Value}";
     }
 }

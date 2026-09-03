@@ -37,12 +37,25 @@ namespace Shiny
         Task Navigate();
     }
 
+    public interface IDialogAware<out T>
+    {
+        event EventHandler<T> Completed;
+        event EventHandler Cancelled;
+    }
+
+    public readonly struct DialogResult<T>
+    {
+        public bool IsCancelled { get; }
+        public T Value { get; }
+    }
+
     public interface INavigator
     {
         INavigationBuilder CreateBuilder(bool fromRoot = false);
         Task NavigateTo(string route, bool relativeNavigation = true, params IEnumerable<(string Key, object Value)> args);
         Task NavigateTo<TViewModel>(Action<TViewModel> configure = null, bool relativeNavigation = true);
         Task NavigateTo<TViewModel>(Action<TViewModel> configure = null, bool relativeNavigation = true, params IEnumerable<(string Key, object Value)> args);
+        Task<DialogResult<T>> ShowDialog<TViewModel, T>(Action<TViewModel> configure = null, System.Threading.CancellationToken cancellationToken = default) where TViewModel : class, IDialogAware<T>;
     }
 
     public sealed class ShinyAppBuilder
@@ -1423,6 +1436,125 @@ namespace TestApp
         // enum metadata should report as "string" type with values in description
         routeInfoSource.ShouldContain("\"string\"");
         routeInfoSource.ShouldContain("Priority level. Must be one of: Low, Medium, High, Urgent");
+    }
+
+    #endregion
+
+    #region Dialog Extensions
+
+    const string PickColorSource = @"
+
+namespace TestApp
+{
+    public class PickColorPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<PickColorPage>(""PickColor"")]
+    public class PickColorViewModel : System.ComponentModel.INotifyPropertyChanged, Shiny.IDialogAware<string>
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event System.EventHandler<string>? Completed;
+        public event System.EventHandler? Cancelled;
+    }
+}";
+
+    [Fact]
+    public void DialogExtensions_DialogAwareViewModel_GeneratesInferredWrapper()
+    {
+        var result = RunGenerator(StubTypes + PickColorSource);
+        var dialogSource = GetGeneratedSource(result, "DialogExtensions.g.cs");
+
+        dialogSource.ShouldContain("global::System.Threading.Tasks.Task<global::Shiny.DialogResult<string>> ShowPickColorDialog(this global::Shiny.INavigator navigator");
+        dialogSource.ShouldContain("navigator.ShowDialog<TestApp.PickColorViewModel, string>");
+        dialogSource.ShouldContain("global::System.Threading.CancellationToken cancellationToken = default");
+    }
+
+    [Fact]
+    public void DialogExtensions_NonDialogViewModel_NotGenerated()
+    {
+        var source = StubTypes + @"
+
+namespace TestApp
+{
+    public class HomePage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<HomePage>]
+    public class HomeViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+}";
+        var result = RunGenerator(source);
+
+        GetGeneratedSourceOrDefault(result, "DialogExtensions.g.cs").ShouldBeNull();
+        GetGeneratedSource(result, "NavigationExtensions.g.cs").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void DialogExtensions_ShellProperties_BecomeMethodParameters()
+    {
+        var source = StubTypes + @"
+
+namespace TestApp
+{
+    public class ConfirmPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<ConfirmPage>(""Confirm"")]
+    public class ConfirmViewModel : System.ComponentModel.INotifyPropertyChanged, Shiny.IDialogAware<bool>
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event System.EventHandler<bool>? Completed;
+        public event System.EventHandler? Cancelled;
+
+        [ShellProperty(required: true)]
+        public string Message { get; set; }
+
+        [ShellProperty(required: false)]
+        public string AcceptText { get; set; }
+    }
+}";
+        var result = RunGenerator(source);
+        var dialogSource = GetGeneratedSource(result, "DialogExtensions.g.cs");
+
+        // required first, then optional with a default, then the token - all defaults trailing
+        dialogSource.ShouldContain("ShowConfirmDialog(this global::Shiny.INavigator navigator, string message, string acceptText = null, global::System.Threading.CancellationToken cancellationToken = default)");
+        dialogSource.ShouldContain("x.Message = message; x.AcceptText = acceptText;");
+        dialogSource.ShouldContain("global::Shiny.DialogResult<bool>");
+    }
+
+    [Fact]
+    public void DialogExtensions_InheritedDialogAware_IsDetected()
+    {
+        var source = StubTypes + @"
+
+namespace TestApp
+{
+    public class PickPage : Microsoft.Maui.Controls.Page { }
+
+    public abstract class DialogBase<T> : System.ComponentModel.INotifyPropertyChanged, Shiny.IDialogAware<T>
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event System.EventHandler<T>? Completed;
+        public event System.EventHandler? Cancelled;
+    }
+
+    [ShellMap<PickPage>(""Pick"")]
+    public class PickViewModel : DialogBase<int>
+    {
+    }
+}";
+        var result = RunGenerator(source);
+        var dialogSource = GetGeneratedSource(result, "DialogExtensions.g.cs");
+
+        dialogSource.ShouldContain("global::Shiny.DialogResult<int>");
+        dialogSource.ShouldContain("navigator.ShowDialog<TestApp.PickViewModel, int>");
+    }
+
+    [Fact]
+    public void DialogExtensions_DisabledWithNavExtensions_NotGenerated()
+    {
+        var result = RunGenerator(StubTypes + PickColorSource, ("ShinyMauiShell_GenerateNavExtensions", "false"));
+
+        GetGeneratedSourceOrDefault(result, "DialogExtensions.g.cs").ShouldBeNull();
     }
 
     #endregion
