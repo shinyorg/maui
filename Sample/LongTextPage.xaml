@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:sample="clr-namespace:Sample"
+             x:DataType="sample:LongTextViewModel"
+             x:Class="Sample.LongTextPage"
+             Title="Long Dialog">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="20" RowSpacing="12">
+
+        <Label Text="Tall dialog"
+               FontAttributes="Bold"
+               FontSize="16" />
+
+        <ScrollView Grid.Row="1" MaximumHeightRequest="360">
+            <VerticalStackLayout BindableLayout.ItemsSource="{Binding Lines}">
+                <BindableLayout.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <Label Text="{Binding .}" FontSize="13" />
+                    </DataTemplate>
+                </BindableLayout.ItemTemplate>
+            </VerticalStackLayout>
+        </ScrollView>
+
+        <HorizontalStackLayout Grid.Row="2" Spacing="8" HorizontalOptions="End">
+            <Button Text="Cancel" Command="{Binding CancelCommand}" />
+            <Button Text="Accept" Command="{Binding AcceptCommand}" />
+        </HorizontalStackLayout>
+    </Grid>
+</ContentPage>

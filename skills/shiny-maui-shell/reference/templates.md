@@ -197,7 +197,10 @@ public partial class {Name}ViewModel(INavigator navigator) : ObservableObject,
 ## Dialog Page Template (awaits a typed result)
 
 Use this instead of the modal template when the page exists to collect a value from the user. No
-`Shell.PresentationMode` is needed — `ShowDialog` presents it modally.
+`Shell.PresentationMode` is needed — the registered `IDialogPresenter` decides how it appears
+(modally by default; as a popup/overlay card with `UseShinyDialogPresenter()` /
+`UseUxDiversDialogPresenter()`). Keep it a `ContentPage` and size the content to what the dialog
+actually needs — the overlay presenters show that content in a card, not a full page.
 
 ### XAML
 ```xml
