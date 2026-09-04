@@ -273,11 +273,57 @@ public interface IDialogPresenter
 
 Register with `ShinyAppBuilder.UseDialogPresenter<TPresenter>()`.
 
+#### Built-in presenters
+
+| Presenter | Package | Registration | Presentation |
+|:----------|:--------|:-------------|:-------------|
+| `ShellModalDialogPresenter` (default) | `Shiny.Maui.Shell` | — | Page on Shell's modal stack |
+| `ShinyOverlayDialogPresenter` | `Shiny.Maui.Shell.ShinyDialogs` | `UseShinyDialogPresenter(Action<ShinyDialogPresenterOptions>?)` | Themed card over a dimmed backdrop, inside the current page |
+| `UxDiversDialogPresenter` | `Shiny.Maui.Shell.UxDiversDialogs` | `UseUxDiversDialogPresenter(Action<UxDiversDialogPresenterOptions>?)` | UXDivers `PopupPage` over a dimmed backdrop |
+
+Both overlay presenters share these options:
+
+```csharp
+double     BackdropOpacity      // 0.5
+Color?     BackdropColor        // null = theme scrim (Shiny) / PopupBackdropColor (UXDivers)
+bool       DismissOnBackdropTap // true - a backdrop tap reports IsCancelled
+double     CornerRadius         // 16
+Color?     CardBackgroundColor  // null = theme surface (Shiny) / PopupBorderColor (UXDivers)
+double     MaxWidth             // 420
+Thickness  Margin               // 24
+```
+
+Plus, per presenter: `uint AnimationDuration` + `Action<Border>? ConfigureCard` (Shiny), and
+`int AnimationDuration`, `bool AvoidKeyboard`, `Action<PopupPage>? ConfigurePopup` (UXDivers).
+
+They present the dialog page's `Content`, so the page must be a `ContentPage` with content set - both
+throw `InvalidOperationException` otherwise. The page underneath stays on screen, so it does **not**
+get `OnDisappearing`/`OnAppearing` around the dialog.
+
+#### ViewDialogPresenter
+
+Base class for presenting into a host that takes a `View` rather than a `Page` - a popup, a bottom
+sheet, an overlay. It handles what the page would otherwise do for you: setting the binding context on
+the detached content, raising `IPageLifecycleAware`, disposing an `IDisposable` ViewModel, and giving
+the content back to its page.
+
+```csharp
+public abstract class ViewDialogPresenter(IMainThread mainThread) : IDialogPresenter
+{
+    protected IMainThread MainThread { get; }
+
+    // Called on the main thread, binding context already set. Complete once the content
+    // is gone; detach it from your host before returning. Never throw on `dismiss`.
+    protected abstract Task PresentView(View content, object viewModel, CancellationToken dismiss);
+}
+```
+
 ### Constraints
 - The dialog ViewModel must be mapped to a page (`[ShellMap<TPage>]` + `AddGeneratedMaps()`, or
   `Add<TPage, TViewModel>()`). `ShowDialog` throws `InvalidOperationException` otherwise.
 - `IPageLifecycleAware.OnAppearing`/`OnDisappearing` and `IDisposable.Dispose` fire on the dialog
-  ViewModel; the page underneath gets `OnDisappearing` on open and `OnAppearing` on close.
+  ViewModel; with the default modal presenter the page underneath gets `OnDisappearing` on open and
+  `OnAppearing` on close (the overlay presenters leave it on screen, so it gets neither).
 - `INavigationAware`, `INavigationConfirmation`, and `INavigator.Navigating`/`Navigated` are
   deliberately not involved — showing a dialog is not a navigation stack mutation.
 - The dialog ViewModel is disposed as the page detaches, marginally before `ShowDialog` returns. The

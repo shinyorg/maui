@@ -23,6 +23,11 @@ triggers:
   - UseShinyDialogs
   - ShinyDialogs
   - UseUxDiversDialogs
+  - UseShinyDialogPresenter
+  - UseUxDiversDialogPresenter
+  - ShinyOverlayDialogPresenter
+  - UxDiversDialogPresenter
+  - ViewDialogPresenter
   - ShinyShell
   - ShellServices
   - ShinyAppBuilder
@@ -181,14 +186,24 @@ builder
 builder
     .UseMauiApp<App>()
     .UseShinyControls()                  // registers the Controls IDialogService
-    .UseShinyShell(x => x.AddGeneratedMaps().UseShinyDialogs());
+    .UseShinyShell(x => x
+        .AddGeneratedMaps()
+        .UseShinyDialogs()               // IDialogs -> Controls dialog service
+        .UseShinyDialogPresenter()       // ShowDialog -> overlay card (optional, see 6a)
+    );
 
 // Styled UXDivers popups (package: Shiny.Maui.Shell.UxDiversDialogs)
 builder
     .UseMauiApp<App>()
-    .UseUxDiversDialogs()                 // initialize UXDivers popup infrastructure
-    .UseShinyShell(x => x.AddGeneratedMaps().UseUxDiversDialogs());
+    .UseShinyShell(x => x
+        .AddGeneratedMaps()
+        .UseUxDiversDialogs()            // IDialogs -> UXDivers popups
+        .UseUxDiversDialogPresenter()    // ShowDialog -> UXDivers popup (optional, see 6a)
+    );
 ```
+
+Either UXDivers call initializes the popup infrastructure (`UseUXDiversPopups()`) itself — do NOT
+also call `builder.UseUXDiversPopups()`, and calling both Shiny extensions initializes it once.
 
 ### 3. AppShell must inherit from `ShinyShell`
 
@@ -565,15 +580,42 @@ var result = await navigator.ShowDialog<PickColorViewModel, string>(x => x.Prese
   value types.
 - User dismissal (hardware back, iOS swipe-down) returns a cancelled `DialogResult<T>`. The passed
   `CancellationToken` firing throws `OperationCanceledException` — these are different things.
-- The dialog page does NOT need `Shell.PresentationMode="Modal"` — the presenter pushes it modally.
+- The dialog page does NOT need `Shell.PresentationMode="Modal"` — the default presenter pushes it modally.
 - Lifecycle: `IPageLifecycleAware.OnAppearing`/`OnDisappearing` and `IDisposable.Dispose` all fire on
-  the dialog ViewModel, and the page underneath gets `OnDisappearing` when the dialog opens and
-  `OnAppearing` when it closes. `INavigationAware`, `INavigationConfirmation` and the
-  `Navigating`/`Navigated` events are deliberately NOT involved — a dialog is not a stack mutation.
+  the dialog ViewModel, and with the default modal presenter the page underneath gets `OnDisappearing`
+  when the dialog opens and `OnAppearing` when it closes. `INavigationAware`, `INavigationConfirmation`
+  and the `Navigating`/`Navigated` events are deliberately NOT involved — a dialog is not a stack mutation.
 - The dialog ViewModel is disposed as the page detaches, marginally before `ShowDialog` returns. The
   returned `DialogResult<T>` is unaffected, but do not use the ViewModel instance after the await.
 
-**Changing presentation** — implement `IDialogPresenter` and register it. The presenter's task must
+**Changing presentation** — the ViewModel, `IDialogAware<T>` and the call site never change; only the
+registered `IDialogPresenter` does.
+
+| Presenter | Package | Registration | Presentation |
+|:----------|:--------|:-------------|:-------------|
+| `ShellModalDialogPresenter` (default) | `Shiny.Maui.Shell` | — | Page on Shell's modal stack |
+| `ShinyOverlayDialogPresenter` | `Shiny.Maui.Shell.ShinyDialogs` | `UseShinyDialogPresenter()` | Themed card over a dimmed backdrop, inside the current page |
+| `UxDiversDialogPresenter` | `Shiny.Maui.Shell.UxDiversDialogs` | `UseUxDiversDialogPresenter()` | UXDivers `PopupPage` over a dimmed backdrop |
+
+```csharp
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseShinyDialogPresenter(o =>        // or .UseUxDiversDialogPresenter(o => ...)
+    {
+        o.BackdropOpacity = 0.6;         // both: BackdropOpacity, BackdropColor, DismissOnBackdropTap,
+        o.CornerRadius = 24;             //       CornerRadius, CardBackgroundColor, MaxWidth, Margin,
+        o.MaxWidth = 480;                //       AnimationDuration
+    })
+);
+```
+
+Both overlay presenters take the dialog page's **Content**, so the dialog page must be a `ContentPage`
+with content set — they throw otherwise. The page underneath stays on screen behind the scrim, so it
+does NOT get `OnDisappearing`/`OnAppearing` around the dialog; the dialog ViewModel's own hooks are
+unchanged. A backdrop tap (or, for the overlay presenter, the host page disappearing) reports
+`IsCancelled`.
+
+**Writing your own** — implement `IDialogPresenter` for a host that takes a `Page`. Its task must
 complete when the page is gone (user-dismissed *or* `dismiss` fired), and must not throw
 `OperationCanceledException` on `dismiss`:
 
@@ -582,6 +624,19 @@ builder.UseShinyShell(x => x
     .AddGeneratedMaps()
     .UseDialogPresenter<MyPopupPresenter>()
 );
+```
+
+For a host that takes a `View` (popup / bottom sheet / overlay), derive from `ViewDialogPresenter`
+instead of implementing the interface directly — it unwraps the page, sets the binding context, raises
+`IPageLifecycleAware`, disposes the ViewModel and restores the content afterwards:
+
+```csharp
+public class MySheetPresenter(IMainThread mainThread) : ViewDialogPresenter(mainThread)
+{
+    // called on the main thread; detach `content` from your host before returning
+    protected override async Task PresentView(View content, object viewModel, CancellationToken dismiss)
+        => /* show content, complete when it is gone */;
+}
 ```
 
 ### 7. ShellServices Aggregate & IMainThread

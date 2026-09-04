@@ -19,7 +19,7 @@
         <ShinyMauiShell_GenerateAiExtensions>true</ShinyMauiShell_GenerateAiExtensions>
 
         <IsAotCompatible>true</IsAotCompatible>
-        
+
         <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">21.0</SupportedOSPlatformVersion>
         <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
         <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
@@ -34,7 +34,7 @@
         <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
         <PublishAot>true</PublishAot>
     </PropertyGroup>
-    
+
     <ItemGroup>
         <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4"/>
         <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128"/>
@@ -48,21 +48,22 @@
 
     <ItemGroup>
         <PackageReference Include="CommunityToolkit.Mvvm"/>
-        <PackageReference Include="Microsoft.Extensions.AI" />
-        <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+        <PackageReference Include="Microsoft.Extensions.AI"/>
+        <PackageReference Include="Microsoft.Extensions.AI.OpenAI"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Debug"/>
         <PackageReference Include="Microsoft.Maui.Controls"/>
-        <PackageReference Include="Shiny.Maui.Controls" />
+        <PackageReference Include="Shiny.Maui.Controls"/>
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\src\Shiny.Maui.Shell.SourceGenerators\Shiny.Maui.Shell.SourceGenerators.csproj"
                           OutputItemType="Analyzer"
                           ReferenceOutputAssembly="false"/>
-        
+
         <ProjectReference Include="..\src\Shiny.Maui.Shell\Shiny.Maui.Shell.csproj"/>
+        <ProjectReference Include="..\src\Shiny.Maui.Shell.ShinyDialogs\Shiny.Maui.Shell.ShinyDialogs.csproj"/>
         <ProjectReference Include="..\src\Shiny.Maui.Shell.UxDiversDialogs\Shiny.Maui.Shell.UxDiversDialogs.csproj"/>
     </ItemGroup>
 
-    <Import Project="..\src\Shiny.Maui.Shell.SourceGenerators\build\Package.targets" />
+    <Import Project="..\src\Shiny.Maui.Shell.SourceGenerators\build\Package.targets"/>
 </Project>

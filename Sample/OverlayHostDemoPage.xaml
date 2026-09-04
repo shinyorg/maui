@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shiny:ShinyContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                        xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+                        xmlns:shiny="http://shiny.net/maui/controls"
+                        xmlns:sample="clr-namespace:Sample"
+                        x:DataType="sample:OverlayHostDemoViewModel"
+                        x:Class="Sample.OverlayHostDemoPage"
+                        IsLoading="{Binding IsLoading}"
+                        Title="Overlay Host">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="12">
+
+            <Label Text="This page is a ShinyContentPage, so the Shiny overlay presenter puts the dialog into the page's own OverlayHost instead of wrapping the page content in a Grid."
+                   TextColor="{AppThemeBinding Light=Gray, Dark=LightGray}" />
+
+            <Button Text="Show dialog"
+                    Command="{Binding ShowDialogCommand}" />
+
+            <Button Text="Show dialog over the loading overlay"
+                    Command="{Binding ShowWhileLoadingCommand}" />
+
+            <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
+
+            <Label Text="Last Result" FontAttributes="Bold" FontSize="16" />
+            <Label Text="{Binding LastResult}" />
+        </VerticalStackLayout>
+    </ScrollView>
+</shiny:ShinyContentPage>

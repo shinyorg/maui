@@ -22,6 +22,10 @@
             <Button Text="Push Detail Within Modal"
                     Command="{Binding PushWithinModalCommand}" />
 
+            <Button Text="Show dialog from this modal"
+                    Command="{Binding ShowDialogFromModalCommand}" />
+            <Label Text="{Binding DialogResult, StringFormat='Dialog: {0}'}" />
+
             <Button Text="Close Modal"
                     Command="{Binding CloseCommand}" />
         </VerticalStackLayout>

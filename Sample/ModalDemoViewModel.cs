@@ -6,9 +6,12 @@ namespace Sample;
 [ShellMap<ModalDemoPage>("modal")]
 public partial class ModalDemoViewModel(
     ILogger<ModalDemoViewModel> logger,
-    INavigator navigator
+    INavigator navigator,
+    DialogEventLog log
 ) : ObservableObject, IPageLifecycleAware, INavigationAware, IDisposable
 {
+    [ObservableProperty] string dialogResult = "(none)";
+
     [ShellProperty(required: true)]
     public string Title { get; set; } = "Modal Page";
 
@@ -22,6 +25,18 @@ public partial class ModalDemoViewModel(
 
     [RelayCommand]
     Task Close() => navigator.GoBack();
+
+    /// <summary>
+    /// A dialog raised while a modal page is up - the overlay presenter has to target the modal, not
+    /// the Shell page buried underneath it.
+    /// </summary>
+    [RelayCommand]
+    async Task ShowDialogFromModal()
+    {
+        var result = await navigator.ShowPickColorDialog(preset: "Blue");
+        this.DialogResult = result.IsCancelled ? "(cancelled)" : result.Value!;
+        log.Add($"Dialog over a modal page -> {this.DialogResult}");
+    }
 
     public void OnNavigatingFrom(IDictionary<string, object> parameters)
         => logger.LogDebug("ModalDemoViewModel.OnNavigatingFrom");

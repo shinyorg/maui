@@ -19,15 +19,15 @@
             </HorizontalStackLayout>
 
             <Button Text="Login with GitHub"
-                    Command="{Binding LoginCommand}" />
+                    Command="{Binding LoginCommand}"
+                    IsEnabled="{Binding IsNotBusy}" />
         </VerticalStackLayout>
 
         <!-- Chat -->
         <Grid Grid.Row="1" IsVisible="{Binding IsAuthenticated}">
             <shiny:ChatView
-                Messages="{Binding Messages}"
-                SendCommand="{Binding SendCommand}"
-                TypingParticipants="{Binding TypingParticipants}"
+                Provider="{Binding Provider}"
+                SessionId="{Binding SessionId}"
                 PlaceholderText="Ask the AI anything..."
                 SendButtonText="Send"
                 MyBubbleColor="#DCF8C6"

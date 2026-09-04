@@ -44,6 +44,9 @@ For anything richer than the four primitives above, present one of your own page
 > **Alternative providers (same `IDialogs` interface, no ViewModel changes needed):**
 > - `Shiny.Maui.Shell.ShinyDialogs` — owned, animated, themeable dialogs powered by [Shiny.Maui.Controls](https://shinylib.net/controls/dialogs/) (never the native alert/prompt; identical across platforms).
 > - `Shiny.Maui.Shell.UxDiversDialogs` — styled popup dialogs powered by [UXDivers Popups](https://github.com/uxdivers/uxd-popups).
+>
+> Both packages also ship an `IDialogPresenter`, so your *ViewModel* dialogs render as a card over a
+> dimmed backdrop instead of a modal page — see [Changing how dialogs appear](#changing-how-dialogs-appear).
 
 ### 📡 Navigation Events
 
@@ -310,11 +313,28 @@ builder
     .UseShinyControls()             // registers the Shiny.Maui.Controls IDialogService
     .UseShinyShell(x => x
         .UseShinyDialogs()          // route IDialogs through the Controls dialog service
+        .UseShinyDialogPresenter()  // ...and render ViewModel dialogs as an overlay card
         .AddGeneratedMaps()
     )
 ```
 
 Your ViewModels continue using `IDialogs` as before — only the visual presentation changes.
+
+`UseShinyDialogPresenter()` is the matching half for [ViewModel dialogs](#8-viewmodel-dialogs): instead
+of pushing the dialog page onto Shell's modal stack, it floats the page's content as a themed card
+over a dimmed backdrop, using the active Shiny theme's `Surface` and `Scrim` colours. On a
+`ShinyContentPage` the overlay goes into that page's own `OverlayHost`; on a plain `ContentPage` it is
+layered over the content.
+
+```csharp
+.UseShinyDialogPresenter(o =>
+{
+    o.BackdropOpacity = 0.6;
+    o.CornerRadius = 24;
+    o.MaxWidth = 480;
+    o.DismissOnBackdropTap = false;     // dialog closes only via the ViewModel's events
+})
+```
 
 ### 7. UxDivers Dialogs (Optional)
 
@@ -337,14 +357,31 @@ Configure in `MauiProgram.cs`:
 ```csharp
 builder
     .UseMauiApp<App>()
-    .UseUxDiversDialogs()       // Initialize UxDivers popup infrastructure
     .UseShinyShell(x => x
-        .UseUxDiversDialogs()   // Register as IDialogs provider
+        .UseUxDiversDialogs()           // route IDialogs through UXDivers popups
+        .UseUxDiversDialogPresenter()   // ...and render ViewModel dialogs as a popup
         .AddGeneratedMaps()
     )
 ```
 
+Either call initializes the UXDivers popup infrastructure (`UseUXDiversPopups()`), and doing both
+initializes it once.
+
 Your ViewModels continue using `IDialogs` as before — only the visual presentation changes.
+
+`UseUxDiversDialogPresenter()` is the matching half for [ViewModel dialogs](#8-viewmodel-dialogs): the
+dialog page's content is hosted in a UXDivers `PopupPage` — a card over a dimmed backdrop, built the
+way their own custom popups are, so it matches the alert/confirm/prompt popups beside it.
+
+```csharp
+.UseUxDiversDialogPresenter(o =>
+{
+    o.BackdropOpacity = 0.6;
+    o.CornerRadius = 24;
+    o.MaxWidth = 480;
+    o.ConfigurePopup = popup => popup.AppearingAnimation = new MoveInPopupAnimation();
+})
+```
 
 ### 8. ViewModel Dialogs
 
@@ -425,11 +462,36 @@ and is unaffected — but don't hold on to the ViewModel instance after the awai
 
 #### Changing how dialogs appear
 
-By default the page is pushed onto Shell's modal stack. Swap in your own presentation — a popup, a
-bottom sheet, anything that can host a `Page` — by implementing `IDialogPresenter`:
+*How* a dialog appears is decided by the registered `IDialogPresenter` — the ViewModel, the
+`IDialogAware<T>` contract, and the call site are identical whichever one you pick.
+
+| Presenter | Package | Presentation |
+|:----------|:--------|:-------------|
+| `ShellModalDialogPresenter` *(default)* | `Shiny.Maui.Shell` | The page on Shell's modal stack |
+| `ShinyOverlayDialogPresenter` | `Shiny.Maui.Shell.ShinyDialogs` | A themed card over a dimmed backdrop, in the current page |
+| `UxDiversDialogPresenter` | `Shiny.Maui.Shell.UxDiversDialogs` | A UXDivers `PopupPage` over a dimmed backdrop |
 
 ```csharp
-public class MyPopupPresenter : IDialogPresenter
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseShinyDialogPresenter()        // or .UseUxDiversDialogPresenter()
+);
+```
+
+The two overlay presenters keep the page underneath on screen behind the scrim, which changes the
+lifecycle table above in one place: the page underneath does **not** disappear when the dialog opens,
+so it neither raises `OnDisappearing` nor `OnAppearing`. The dialog ViewModel's own hooks — including
+`Dispose` — fire exactly as they do for a modal.
+
+Both are dismissed by a tap on the backdrop (`DismissOnBackdropTap = false` turns that off), and both
+report a dismissal as `IsCancelled`. The overlay presenter also treats the host page disappearing as a
+dismissal: an overlay lives inside a page, so a navigation away takes the dialog with it, and the
+awaiting caller has to be released rather than left hanging.
+
+**Writing your own.** Implement `IDialogPresenter` for anything that can host a `Page`:
+
+```csharp
+public class MyPresenter : IDialogPresenter
 {
     // Show the page; complete the Task once it is gone, either because the user
     // dismissed it or because `dismiss` fired. Never throw on `dismiss`.
@@ -438,8 +500,24 @@ public class MyPopupPresenter : IDialogPresenter
 
 builder.UseShinyShell(x => x
     .AddGeneratedMaps()
-    .UseDialogPresenter<MyPopupPresenter>()
+    .UseDialogPresenter<MyPresenter>()
 );
+```
+
+For a host that takes a `View` rather than a `Page` — a popup, a bottom sheet, a custom overlay —
+derive from `ViewDialogPresenter` instead. It hands you the page's content with the binding context
+already set, and takes care of what the page would otherwise have done for you: raising
+`IPageLifecycleAware`, disposing the ViewModel, and giving the content back to its page afterwards.
+
+```csharp
+public class MySheetPresenter(IMainThread mainThread) : ViewDialogPresenter(mainThread)
+{
+    protected override async Task PresentView(View content, object viewModel, CancellationToken dismiss)
+    {
+        // Called on the main thread. Show `content`; complete once it is gone, and
+        // detach it from your host before returning.
+    }
+}
 ```
 
 ---

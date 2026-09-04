@@ -4,33 +4,78 @@
              xmlns:sample="clr-namespace:Sample"
              x:DataType="sample:DialogDemoViewModel"
              x:Class="Sample.DialogDemoPage"
-             Title="Dialogs">
+             Title="Dialog Bench">
 
     <ScrollView>
         <VerticalStackLayout Padding="20" Spacing="12">
 
-            <Label Text="All dialogs use the IDialogs abstraction, backed by UxDivers Popups in this sample."
+            <Label Text="Both IDialogs and IDialogPresenter are picked once at startup, so the sample routes through a switchable wrapper. Change either below and every button under it uses the new one."
                    TextColor="{AppThemeBinding Light=Gray, Dark=LightGray}" />
 
-            <Button Text="Alert"
-                    Command="{Binding ShowAlertCommand}" />
+            <Label Text="Providers" FontAttributes="Bold" FontSize="16" />
 
-            <Button Text="Confirm"
-                    Command="{Binding ShowConfirmCommand}" />
+            <Picker Title="IDialogs provider"
+                    ItemsSource="{Binding Providers}"
+                    SelectedItem="{Binding Switch.Provider}" />
 
-            <Button Text="Prompt"
-                    Command="{Binding ShowPromptCommand}" />
+            <Picker Title="IDialogPresenter"
+                    ItemsSource="{Binding Presenters}"
+                    SelectedItem="{Binding Switch.Presenter}" />
 
-            <Button Text="Action Sheet"
-                    Command="{Binding ShowActionSheetCommand}" />
+            <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
+            <Label Text="IDialogs" FontAttributes="Bold" FontSize="16" />
 
-            <Button Text="ViewModel Dialog (awaits a typed result)"
+            <Button Text="Alert" Command="{Binding ShowAlertCommand}" />
+            <Button Text="Confirm" Command="{Binding ShowConfirmCommand}" />
+            <Button Text="Prompt" Command="{Binding ShowPromptCommand}" />
+            <Button Text="Action Sheet" Command="{Binding ShowActionSheetCommand}" />
+
+            <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
+            <Label Text="ViewModel dialogs (IDialogPresenter)" FontAttributes="Bold" FontSize="16" />
+
+            <Button Text="ViewModel dialog (awaits a typed result)"
                     Command="{Binding ShowViewModelDialogCommand}" />
+
+            <Button Text="Tall dialog (card sizing)"
+                    Command="{Binding ShowTallDialogCommand}" />
+
+            <Button Text="Cancelled by the caller after 3s"
+                    Command="{Binding ShowAutoCancelledDialogCommand}" />
+
+            <Button Text="Dialog, then navigate away after 2s"
+                    Command="{Binding ShowThenNavigateAwayCommand}" />
+
+            <Button Text="Dialog over a modal page"
+                    Command="{Binding ShowDialogOverModalCommand}" />
+
+            <Button Text="Dialog from a ShinyContentPage"
+                    Command="{Binding OpenOverlayHostPageCommand}" />
+
+            <Label Text="A nested dialog is on the colour picker itself - open the ViewModel dialog and use 'Nested dialog' inside it."
+                   FontSize="12"
+                   TextColor="{AppThemeBinding Light=Gray, Dark=LightGray}" />
 
             <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
 
             <Label Text="Last Result" FontAttributes="Bold" FontSize="16" />
             <Label Text="{Binding LastResult}" />
+
+            <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                <Label Text="Event log" FontAttributes="Bold" FontSize="16" VerticalOptions="Center" />
+                <Button Grid.Column="1" Text="Clear" Command="{Binding ClearLogCommand}" />
+            </Grid>
+
+            <Label Text="Lifecycle and dispose hooks land here so they can be checked on a device, where the debug output isn't visible."
+                   FontSize="12"
+                   TextColor="{AppThemeBinding Light=Gray, Dark=LightGray}" />
+
+            <VerticalStackLayout BindableLayout.ItemsSource="{Binding Log.Entries}" Spacing="2">
+                <BindableLayout.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <Label Text="{Binding .}" FontSize="12" FontFamily="Monospace" />
+                    </DataTemplate>
+                </BindableLayout.ItemTemplate>
+            </VerticalStackLayout>
         </VerticalStackLayout>
     </ScrollView>
 </ContentPage>

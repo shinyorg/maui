@@ -15,4 +15,22 @@ public static class ShinyDialogsExtensions
         builder.UseDialogs<ShinyDialogs>();
         return builder;
     }
+
+
+    /// <summary>
+    /// Registers <see cref="ShinyOverlayDialogPresenter"/> as the <see cref="IDialogPresenter"/>, so
+    /// ViewModel dialogs shown with <see cref="INavigator.ShowDialog{TViewModel, T}"/> appear as a
+    /// themed card over a dimmed backdrop instead of a Shell modal page.
+    /// </summary>
+    /// <param name="builder"></param>
+    /// <param name="configure">Optional - backdrop, corner radius, max width, animation duration.</param>
+    public static ShinyAppBuilder UseShinyDialogPresenter(this ShinyAppBuilder builder, Action<ShinyDialogPresenterOptions>? configure = null)
+    {
+        var options = new ShinyDialogPresenterOptions();
+        configure?.Invoke(options);
+
+        builder.MauiBuilder.Services.AddSingleton(options);
+        builder.UseDialogPresenter<ShinyOverlayDialogPresenter>();
+        return builder;
+    }
 }
