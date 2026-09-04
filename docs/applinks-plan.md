@@ -9,6 +9,7 @@ costs the user an array on an attribute they already write, two MSBuild properti
 The route map is already fully described. `[ShellMap<TPage>]` gives us the route, the page, the
 ViewModel and whether the route is Shell-declared or `Routing.RegisterRoute`'d; `[ShellProperty]`
 gives us the navigable parameters with their CLR types and required-ness. The generator already
+turns that into `AddGeneratedMaps()`, `Routes`, `NavigateTo{X}`, `Add{X}`, `Show{X}Dialog` and the AI
 route metadata. An app link is a fourth projection of the same metadata — an inbound URL template
 instead of an outbound method signature.
 
