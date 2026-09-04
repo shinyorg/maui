@@ -499,6 +499,142 @@ public void OnNavigatingFrom(IDictionary<string, object> parameters)
 }
 ```
 
+## IAppLinks Interface
+
+Handles inbound deep links. Registered by `UseAppLinks()`; most apps never call it directly.
+
+```csharp
+public interface IAppLinks
+{
+    // Resolves the URI to a route and navigates. True when matched (or queued for a
+    // Shell that has not started yet).
+    Task<bool> Handle(Uri uri);
+
+    // Resolves without navigating - for testing, or for inspecting a link before acting.
+    bool TryResolve(Uri uri, out AppLinkMatch match);
+}
+
+public record AppLinkMatch(
+    string Route,
+    string Template,
+    Type ViewModelType,
+    IReadOnlyDictionary<string, string> Values,   // case-insensitive
+    Uri Uri
+);
+```
+
+Call `Handle` yourself only where a platform hook cannot be reached automatically - currently
+Windows protocol activation.
+
+## AppLinkOptions Class
+
+```csharp
+public class AppLinkOptions
+{
+    // Absolute route a relative link is pushed onto when the app is cold-started by it.
+    // Null means the link lands on Shell's own first item.
+    public string? DefaultRoot { get; set; }
+
+    // Last word on the destination, overriding the registerRoute inference and DefaultRoot.
+    public Func<AppLinkMatch, string>? ResolveRoute { get; set; }
+
+    // Called when nothing matched. Return true to report the link as handled.
+    // Default: logs a warning and leaves the user where they are.
+    public Func<Uri, Task<bool>>? OnUnhandled { get; set; }
+}
+```
+
+### Constraints
+
+- Templates are declared on `[ShellMap(appLinks: [...])]` — there is no separate attribute and no
+  runtime registration API you should call.
+- Push vs. reset is **inferred** from `registerRoute` and is not configurable per template; use
+  `ResolveRoute` for the rare Shell whose structure breaks that convention.
+- A required value that is missing or unparseable makes the template fail to bind. The router tries
+  the next matching template, then `OnUnhandled`. It never throws at the caller.
+- Matching is ordered by specificity: literal segments beat tokens, so `product/featured` is tried
+  before `product/{id}`. Two templates of the same shape are a **SHINY007** build error.
+
+## AppLinkRoutes Class
+
+Pure helper exposing the push-vs-reset rule so it can be reasoned about and tested directly.
+
+```csharp
+public static class AppLinkRoutes
+{
+    public static string Build(
+        AppLinkMatch match,
+        RegisteredAppLink link,
+        bool coldStart,
+        AppLinkOptions options
+    );
+}
+```
+
+## App Shortcuts
+
+Home screen quick actions. Declared with named properties on `[ShellMap]`; platform delivery is
+MAUI's `AppActions`.
+
+```csharp
+// on ShellMapAttribute<TPage>
+public string? Shortcut { get; set; }          // title - setting this declares the shortcut
+public string? ShortcutSubtitle { get; set; }  // iOS only in practice
+public string? ShortcutIcon { get; set; }      // system icon (iOS) / drawable (Android)
+public int ShortcutOrder { get; set; }
+```
+
+```csharp
+public record RegisteredAppShortcut(
+    string Id,                  // the route unless overridden
+    string Route,
+    Type ViewModelType,
+    bool RegisterRoute,         // drives push vs. reset, as for app links
+    string Title,
+    string? Subtitle,
+    string? Icon,
+    int Order,
+    Action<object>? Configure
+);
+
+public class AppShortcutRegistry
+{
+    public const int PlatformMaximum = 4;
+    public IReadOnlyList<RegisteredAppShortcut> Shortcuts { get; }   // in display order
+    public void Add(RegisteredAppShortcut shortcut);
+    public RegisteredAppShortcut? Find(string id);                    // case-sensitive
+}
+```
+
+```csharp
+// Localization - the declared strings are attribute literals and cannot be translated alone
+public interface IAppShortcutText
+{
+    string  GetTitle(string route, string declared);
+    string? GetSubtitle(string route, string? declared);
+}
+
+public interface IAppShortcuts
+{
+    Task Refresh();   // re-resolve text and re-push; call after a language change
+}
+```
+
+Register with `UseShortcutText<T>()`. Resolution runs at install time (so `CurrentUICulture` is
+known) and again on `Refresh()`. The default returns the declared strings verbatim.
+
+### Constraints
+
+- A route with a **required** `[ShellProperty]` cannot declare a shortcut via the attribute
+  (**SHINY010**) — an attribute cannot supply a runtime value. Use
+  `AddAppShortcut<TViewModel>(configure: ...)`.
+- The `configure` lambda survives restarts because only the **id** is persisted by the platform;
+  the registration is rebuilt each launch and resolved by id.
+- `Find` is case-sensitive — the id round-trips through the platform verbatim.
+- iOS shows at most four and drops the rest silently.
+- Shortcut titles come from attribute literals, so localization goes through `IAppShortcutText`
+  rather than the attribute. Installed shortcuts keep their text until `Refresh()` is called.
+
 ## ShinyAppBuilder Class
 
 Fluent builder for registering Page-to-ViewModel mappings and configuring shell services. Used inside `UseShinyShell()`.
@@ -521,6 +657,33 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
     // Replace the default dialog presenter (ShellModalDialogPresenter) used by ShowDialog.
     // Same registration semantics as UseDialogs.
     ShinyAppBuilder UseDialogPresenter<TPresenter>() where TPresenter : class, IDialogPresenter;
+
+    // Enable inbound app links and install the platform delivery points (iOS OpenUrl and
+    // ContinueUserActivity, Android OnCreate and OnNewIntent). Templates themselves come from
+    // [ShellMap(appLinks: [...])] via AddGeneratedMaps(). Windows has no automatic hook.
+    ShinyAppBuilder UseAppLinks(Action<AppLinkOptions>? configure = null);
+
+    // Called by the generated AddGeneratedMaps() - do not call by hand.
+    ShinyAppBuilder AddAppLink<TViewModel>(
+        string template,
+        Func<TViewModel, IReadOnlyDictionary<string, string>, bool> apply
+    ) where TViewModel : class;
+
+    // Route registration lookup - page/ViewModel types plus whether the route was registered
+    // with Shell (false means it is declared in AppShell XAML).
+    (bool RegisterRoute, Type PageType, Type ViewModelType)? GetRouteInfo(string route);
+
+    // Register a quick action by hand. The generated AddGeneratedMaps() emits calls to this, so
+    // shortcuts still work with source generation disabled. configure handles routes whose
+    // ViewModel needs values the attribute cannot supply.
+    ShinyAppBuilder AddAppShortcut<TViewModel>(
+        string title,
+        string? subtitle = null,
+        string? icon = null,
+        int order = 0,
+        string? id = null,
+        Action<TViewModel>? configure = null
+    ) where TViewModel : class;
 }
 ```
 

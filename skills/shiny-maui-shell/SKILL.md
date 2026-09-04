@@ -18,6 +18,45 @@ triggers:
   - IDialogs
   - ShellMap
   - ShellProperty
+  - appLinks
+  - app link
+  - app links
+  - applink
+  - deep link
+  - deeplink
+  - universal link
+  - custom url scheme
+  - url scheme
+  - IAppLinks
+  - UseAppLinks
+  - AppLinkOptions
+  - AppLinkRegistry
+  - AppLinkRoutes
+  - AppLinkMatch
+  - ShinyAppLinkSchemes
+  - ShinyAppLinkDomains
+  - intent filter
+  - associated domains
+  - CFBundleURLTypes
+  - apple-app-site-association
+  - assetlinks.json
+  - app shortcut
+  - app shortcuts
+  - quick action
+  - quick actions
+  - home screen shortcut
+  - AppActions
+  - AppAction
+  - AddAppShortcut
+  - ShortcutIcon
+  - ShortcutSubtitle
+  - ShortcutOrder
+  - IAppShortcutText
+  - UseShortcutText
+  - IAppShortcuts
+  - shortcut localization
+  - UIApplicationShortcutItem
+  - ShortcutManager
   - UseShinyShell
   - UseDialogs
   - UseShinyDialogs
@@ -504,6 +543,107 @@ public class ChatViewModel(AiMauiShellTools aiTools)
 - Properties can be `string`, `int`, `bool`, `double`, enums, `DateTime`, `Guid`, etc. — the generated `NavigateToRoute` handles type conversion automatically
 - Enums are especially AI-friendly — the model outputs the member name as a string and the generator parses it case-insensitively
 
+### 5e. App Links (deep links)
+
+Declare inbound URL templates in the `appLinks` argument of `[ShellMap]` - never a separate attribute:
+
+```csharp
+[ShellMap<ProductPage>(
+    description: "Shows a product",
+    appLinks: ["product/{id}", "p/{id}"]
+)]
+public partial class ProductViewModel : ObservableObject
+{
+    [ShellProperty("The product id")] public int     Id  { get; set; }
+    [ShellProperty(required: false)]  public string? Tab { get; set; }
+}
+```
+
+Wire it up once:
+
+```xml
+<PropertyGroup>
+  <ShinyAppLinkSchemes>myapp</ShinyAppLinkSchemes>
+  <ShinyAppLinkDomains>shinylib.net</ShinyAppLinkDomains>
+</PropertyGroup>
+```
+
+```csharp
+.UseShinyShell(x => x.AddGeneratedMaps())
+```
+
+`AddGeneratedMaps()` installs everything declared on `[ShellMap]` - routes, app links and app
+shortcuts. There is no separate opt-in call.
+
+**Rules to follow when generating app link code:**
+
+1. `{token}` names must match a `[ShellProperty]` name (case-insensitive) or the build fails with
+   **SHINY005**. Query values bind by property name too.
+2. Do **not** add a `navigationRoot` or nav-mode argument - push vs. reset is inferred from
+   `registerRoute`. `registerRoute: false` (a `ShellContent` in AppShell XAML) resets to `//route`;
+   `registerRoute: true` pushes.
+3. Do **not** hand-write URL parsing, an `Application` subclass, an `AppDelegate` `OpenUrl`
+   override, or a `MainActivity` `OnNewIntent` override. `AddGeneratedMaps()` installs all of it.
+   `UseAppLinks(o => ...)` is optional and only changes `AppLinkOptions` defaults.
+4. Templates carry no scheme or host - any configured scheme or domain serves any template.
+5. Manifest entries are **not** generated. The build emits SHINY101-105 warnings containing the
+   exact markup; put `[IntentFilter]` on `MainActivity` for Android, `CFBundleURLTypes` in
+   `Info.plist` and `com.apple.developer.associated-domains` in `Entitlements.plist` for Apple.
+6. To build an outbound URL use the generated `Create{Route}AppLink(...)`, not string concatenation.
+   It is only generated when exactly one scheme (or one domain, with no scheme) is configured.
+
+Optional tuning:
+
+```csharp
+.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseAppLinks(o =>
+    {
+        o.DefaultRoot = "//main/home";           // back stack for cold-start pushes
+        o.ResolveRoute = match => "//custom";    // overrides the registerRoute inference
+        o.OnUnhandled = uri => Task.FromResult(false);
+    })
+)
+```
+
+### 5f. App Shortcuts (home screen quick actions)
+
+Declared with **named properties on `[ShellMap]`** - there is no separate attribute:
+
+```csharp
+[ShellMap<SearchPage>(
+    Shortcut         = "Search",
+    ShortcutSubtitle = "Find anything",
+    ShortcutIcon     = "search",
+    ShortcutOrder    = 0
+)]
+public partial class SearchViewModel : ObservableObject { }
+```
+
+```csharp
+.UseShinyShell(x => x.AddGeneratedMaps())
+```
+
+**Rules to follow when generating app shortcut code:**
+
+1. `Shortcut` (the title) is the trigger. Setting `ShortcutSubtitle`/`ShortcutIcon`/`ShortcutOrder`
+   without it is a **SHINY012** error - nothing would be declared.
+2. A route with a **required** `[ShellProperty]` cannot declare a shortcut (**SHINY010**). Use
+   `builder.AddAppShortcut<TViewModel>(title, configure: vm => vm.X = ..., id: "...")` instead.
+3. At most four shortcuts (**SHINY011** warns) - iOS drops the excess silently.
+4. Do **not** write platform code, and do **not** emit an opt-in call for shortcuts - none
+   exists. `AddGeneratedMaps()` installs shortcuts. MAUI's `AppActions` handles delivery; do not
+   hand-write `UIApplicationShortcutItem`, `ShortcutManagerCompat`,
+   `ConfigureEssentials`/`AddAppAction`, or an `OnAppAction` switch.
+5. Do **not** add a navigation-mode argument - push vs. reset is inferred from `registerRoute`,
+   same as app links.
+6. `AddAppShortcut<TViewModel>` is the public API the generator emits calls to; it is also how to
+   use shortcuts when source generation is disabled.
+7. For **localized** titles/subtitles, implement `IAppShortcutText` and register it with
+   `UseShortcutText<T>()` - the declared string becomes the resource key. Do not try to localize by
+   putting `CultureInfo` logic in the attribute; attribute arguments are compile-time constants.
+   After a language change call `IAppShortcuts.Refresh()`, or the installed text stays stale.
+
 ### 6. Dialogs
 
 Always use `IDialogs` for user-facing dialogs. Inject it via the primary constructor:
@@ -754,6 +894,19 @@ public static class NavigationBuilderExtensions
     }
 }
 ```
+
+### AppLinkExtensions.g.cs
+
+Generated only when `appLinks` templates exist **and** exactly one scheme (or one domain, with no
+scheme) is configured - otherwise there is no single correct base URL to build against.
+
+```csharp
+var uri = navigator.CreateProductAppLink(id: 42, tab: "reviews");
+// myapp://product/42?Tab=reviews
+```
+
+App link registrations are also appended to `AddGeneratedMaps()` as `builder.AddAppLink<TViewModel>(...)`
+calls carrying a source-generated binder - never call `AddAppLink` by hand.
 
 ### Configuring Source Generation
 

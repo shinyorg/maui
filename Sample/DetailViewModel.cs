@@ -4,7 +4,7 @@ using Shiny;
 
 namespace Sample;
 
-[ShellMap<DetailPage>]
+[ShellMap<DetailPage>(appLinks: ["detail/{text}"])]
 [global::System.ComponentModel.Description("This is a test generation")]
 public partial class DetailViewModel(
     ILogger<DetailViewModel> logger,
@@ -14,6 +14,9 @@ public partial class DetailViewModel(
 {
     [ShellProperty("This is required Text to render", required: true)]
     public string Text { get; set; } = string.Empty;
+
+    [ShellProperty("Optional line to highlight - demonstrates typed app link conversion", required: false)]
+    public int Highlight { get; set; }
 
     [ObservableProperty] string source = "unknown";
     [ObservableProperty] bool requireConfirmation;

@@ -47,6 +47,78 @@ public class ShinyShellGenerator : IIncrementalGenerator
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true
     );
+    static readonly DiagnosticDescriptor AppLinkTokenNotFound = new(
+        "SHINY005",
+        "App link token has no matching ShellProperty",
+        "The app link template '{0}' contains the token '{{{1}}}' but '{2}' has no [ShellProperty] property with that name.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor AppLinkUnsupportedType = new(
+        "SHINY006",
+        "App link property type cannot be converted from a URL value",
+        "Property '{0}' of type '{1}' is used by app link template '{2}' but there is no supported conversion from a URL string.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor AppLinkAmbiguousTemplate = new(
+        "SHINY007",
+        "Ambiguous app link templates",
+        "App link template '{0}' on route '{1}' has the same shape as '{2}' on route '{3}' - an inbound URL could match either.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor AppLinkNoSchemeOrDomain = new(
+        "SHINY008",
+        "App links declared without a scheme or domain",
+        "{0} app link template(s) are declared but neither ShinyAppLinkSchemes nor ShinyAppLinkDomains is set - no platform manifest entries can be generated or validated.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor AppLinkRequiredNotInPath = new(
+        "SHINY009",
+        "Required property is not part of the app link path",
+        "Property '{0}' is required but is not a token in app link template '{1}' - inbound links must supply it as a query value or navigation will be skipped.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor ShortcutOnParameterisedRoute = new(
+        "SHINY010",
+        "App shortcut on a route that requires parameters",
+        "Route '{0}' declares a shortcut but property '{1}' is required, and an attribute cannot supply a runtime value. Remove the Shortcut property, make '{1}' optional, or register it with ShinyAppBuilder.AddAppShortcut<{2}>(configure: x => x.{1} = ...).",
+        "Shiny.Shell",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor TooManyShortcuts = new(
+        "SHINY011",
+        "More app shortcuts than the platform will show",
+        "{0} app shortcuts are declared but at most 4 are shown - iOS drops the excess silently. Reduce the count or set ShortcutOrder so the important ones come first.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true
+    );
+
+    static readonly DiagnosticDescriptor ShortcutMissingTitle = new(
+        "SHINY012",
+        "App shortcut properties set without a title",
+        "Route '{0}' sets {1} but not Shortcut, so no quick action is declared. Set Shortcut to the title, or remove the other Shortcut properties.",
+        "Shiny.Shell",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true
+    );
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // Find classes with ShellMapAttribute
@@ -66,6 +138,8 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 provider.GlobalOptions.TryGetValue("build_property.ShinyMauiShell_AiExtensionsClassName", out var aiClassName);
                 provider.GlobalOptions.TryGetValue("build_property.ShinyMauiShell_AiNavigateMethodName", out var aiNavigateMethodName);
                 provider.GlobalOptions.TryGetValue("build_property.ShinyMauiShell_AiToolsClassName", out var aiToolsClassName);
+                provider.GlobalOptions.TryGetValue("build_property.ShinyAppLinkSchemes", out var appLinkSchemes);
+                provider.GlobalOptions.TryGetValue("build_property.ShinyAppLinkDomains", out var appLinkDomains);
                 // empty or missing is considered true for route/nav, but false for ai (opt-in)
                 return new GeneratorOptions(
                     GenerateRouteConstants: !string.Equals(routeValue, "false", StringComparison.OrdinalIgnoreCase),
@@ -73,7 +147,9 @@ public class ShinyShellGenerator : IIncrementalGenerator
                     GenerateAiExtensions: string.Equals(aiValue, "true", StringComparison.OrdinalIgnoreCase),
                     AiExtensionsClassName: string.IsNullOrWhiteSpace(aiClassName) ? "AiExtensions" : aiClassName!.Trim(),
                     AiNavigateMethodName: string.IsNullOrWhiteSpace(aiNavigateMethodName) ? "NavigateToRoute" : aiNavigateMethodName!.Trim(),
-                    AiToolsClassName: string.IsNullOrWhiteSpace(aiToolsClassName) ? "AiMauiShellTools" : aiToolsClassName!.Trim()
+                    AiToolsClassName: string.IsNullOrWhiteSpace(aiToolsClassName) ? "AiMauiShellTools" : aiToolsClassName!.Trim(),
+                    AppLinkSchemes: appLinkSchemes ?? "",
+                    AppLinkDomains: appLinkDomains ?? ""
                 );
             });
 
@@ -84,190 +160,143 @@ public class ShinyShellGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(combined, (spc, data) => GenerateCode(spc, data.Left.Left, data.Left.Right, data.Right));
     }
-
     static ShellMapInfo? GetShellMapClass(GeneratorSyntaxContext context)
     {
         var classDeclaration = (ClassDeclarationSyntax)context.Node;
-        
-        foreach (var attributeList in classDeclaration.AttributeLists)
-        {
-            foreach (var attribute in attributeList.Attributes)
-            {
-                var symbolInfo = context.SemanticModel.GetSymbolInfo(attribute);
-                if (symbolInfo.Symbol is IMethodSymbol attributeSymbol)
-                {
-                    var attributeClass = attributeSymbol.ContainingType;
-                    if (attributeClass.Name == "ShellMapAttribute" && attributeClass.IsGenericType)
-                    {
-                        var pageType = attributeClass.TypeArguments[0];
-                        var route = GetRouteFromAttribute(attribute);
-                        var registerRoute = GetRegisterRouteFromAttribute(attribute);
-                        var description = GetDescriptionFromAttribute(attribute);
-                        var properties = GetShellProperties(classDeclaration, context.SemanticModel);
+        if (context.SemanticModel.GetDeclaredSymbol(classDeclaration) is not INamedTypeSymbol viewModelSymbol)
+            return null;
 
-                        var viewModelSymbol = context.SemanticModel.GetDeclaredSymbol(classDeclaration);
-                        var generatedName = route ?? pageType.Name.Replace("Page", "");
-                        return new ShellMapInfo(
-                            classDeclaration.Identifier.ValueText,
-                            viewModelSymbol?.ToDisplayString() ?? classDeclaration.Identifier.ValueText,
-                            pageType.Name,
-                            pageType.ToDisplayString(),
-                            route ?? pageType.Name,
-                            generatedName,
-                            registerRoute,
-                            description,
-                            properties,
-                            attribute.GetLocation(),
-                            GetDialogResultType(viewModelSymbol)
-                        );
-                    }
-                }
-            }
+        foreach (var attr in viewModelSymbol.GetAttributes())
+        {
+            var attributeClass = attr.AttributeClass;
+            if (attributeClass?.Name != "ShellMapAttribute" || !attributeClass.IsGenericType)
+                continue;
+
+            var pageType = attributeClass.TypeArguments[0];
+            var route = GetStringArg(attr, 0, "route");
+            var description = GetStringArg(attr, 2, "description");
+            var generatedName = route ?? pageType.Name.Replace("Page", "");
+
+            return new ShellMapInfo(
+                classDeclaration.Identifier.ValueText,
+                viewModelSymbol.ToDisplayString(),
+                pageType.Name,
+                pageType.ToDisplayString(),
+                route ?? pageType.Name,
+                generatedName,
+                GetBoolArg(attr, 1, "registerRoute", true),
+                description,
+                GetShellProperties(viewModelSymbol),
+                attr.ApplicationSyntaxReference?.GetSyntax().GetLocation() ?? classDeclaration.GetLocation(),
+                GetDialogResultType(viewModelSymbol),
+                GetStringArrayArg(attr, 3, "appLinks"),
+                GetNamedString(attr, "Shortcut"),
+                GetNamedString(attr, "ShortcutSubtitle"),
+                GetNamedString(attr, "ShortcutIcon"),
+                GetNamedInt(attr, "ShortcutOrder")
+            );
         }
-        
+
         return null;
     }
 
-    static string? GetRouteFromAttribute(AttributeSyntax attribute)
+    // Roslyn fills ConstructorArguments for every parameter of the attribute constructor,
+    // defaults included, and places a `name:` argument into its own positional slot. That makes
+    // a positional read correct however the attribute was written at the call site - including
+    // `new[] { ... }` vs a collection expression for array arguments. The named-argument sweep
+    // is the fallback for a property/field initializer of the same name.
+
+    static string? GetStringArg(AttributeData attr, int index, string name)
     {
-        if (attribute.ArgumentList?.Arguments.Count > 0)
+        if (attr.ConstructorArguments.Length > index)
         {
-            // Look for the route parameter specifically
-            foreach (var arg in attribute.ArgumentList.Arguments)
-            {
-                // Check if it's a named argument for "route"
-                if (arg.NameColon?.Name.Identifier.ValueText == "route")
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal)
-                    {
-                        return literal.Token.ValueText;
-                    }
-                }
-                // If it's the first positional argument (no named colon)
-                else if (arg == attribute.ArgumentList.Arguments[0] && arg.NameColon == null)
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal &&
-                        literal.Token.IsKind(SyntaxKind.StringLiteralToken))
-                    {
-                        return literal.Token.ValueText;
-                    }
-                }
-            }
+            var arg = attr.ConstructorArguments[index];
+            if (arg.Kind == TypedConstantKind.Primitive && arg.Value is string s)
+                return s;
+        }
+
+        foreach (var named in attr.NamedArguments)
+        {
+            if (named.Key == name && named.Value.Value is string s)
+                return s;
         }
         return null;
     }
 
-    static bool GetRegisterRouteFromAttribute(AttributeSyntax attribute)
+    static bool GetBoolArg(AttributeData attr, int index, string name, bool defaultValue)
     {
-        if (attribute.ArgumentList?.Arguments.Count > 0)
+        if (attr.ConstructorArguments.Length > index)
         {
-            var arguments = attribute.ArgumentList.Arguments;
-            
-            // Look for the registerRoute parameter specifically
-            foreach (var arg in arguments)
-            {
-                // Check if it's a named argument for "registerRoute"
-                if (arg.NameColon?.Name.Identifier.ValueText == "registerRoute")
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal)
-                    {
-                        if (literal.Token.IsKind(SyntaxKind.FalseKeyword))
-                            return false;
-                        if (literal.Token.IsKind(SyntaxKind.TrueKeyword))
-                            return true;
-                    }
-                }
-            }
-            
-            // Check positional arguments
-            for (int i = 0; i < arguments.Count; i++)
-            {
-                var arg = arguments[i];
-                
-                // If it's the second positional argument (index 1) and not a named argument
-                if (i == 1 && arg.NameColon == null)
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal)
-                    {
-                        if (literal.Token.IsKind(SyntaxKind.FalseKeyword))
-                            return false;
-                        if (literal.Token.IsKind(SyntaxKind.TrueKeyword))
-                            return true;
-                    }
-                }
-                // Handle case where registerRoute is the first argument (when route is omitted)
-                else if (i == 0 && 
-                         arg.NameColon == null &&
-                         arg.Expression is LiteralExpressionSyntax literal &&
-                         (literal.Token.IsKind(SyntaxKind.TrueKeyword) || literal.Token.IsKind(SyntaxKind.FalseKeyword)))
-                {
-                    if (literal.Token.IsKind(SyntaxKind.FalseKeyword))
-                        return false;
-                    if (literal.Token.IsKind(SyntaxKind.TrueKeyword))
-                        return true;
-                }
-            }
+            var arg = attr.ConstructorArguments[index];
+            if (arg.Kind == TypedConstantKind.Primitive && arg.Value is bool b)
+                return b;
         }
-        // Default value is true according to the attribute definition
-        return true;
+
+        foreach (var named in attr.NamedArguments)
+        {
+            if (named.Key == name && named.Value.Value is bool b)
+                return b;
+        }
+        return defaultValue;
     }
 
-    static string GetDescriptionFromAttribute(AttributeSyntax attribute)
+    /// <summary>
+    /// Named property initializers land in NamedArguments, never in ConstructorArguments - so
+    /// these deliberately do not take a positional index the way the constructor readers do.
+    /// </summary>
+    static string? GetNamedString(AttributeData attr, string name)
     {
-        if (attribute.ArgumentList?.Arguments.Count > 0)
+        foreach (var named in attr.NamedArguments)
         {
-            foreach (var arg in attribute.ArgumentList.Arguments)
-            {
-                if (arg.NameColon?.Name.Identifier.ValueText == "description")
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal &&
-                        literal.Token.IsKind(SyntaxKind.StringLiteralToken))
-                        return literal.Token.ValueText;
-                    return null;
-                }
-            }
-
-            // Positional: description is 3rd param (index 2) on ShellMapAttribute(route, registerRoute, description)
-            int positionalIndex = 0;
-            foreach (var arg in attribute.ArgumentList.Arguments)
-            {
-                if (arg.NameColon != null)
-                    continue;
-
-                if (positionalIndex == 2 &&
-                    arg.Expression is LiteralExpressionSyntax literal &&
-                    literal.Token.IsKind(SyntaxKind.StringLiteralToken))
-                    return literal.Token.ValueText;
-
-                positionalIndex++;
-            }
+            if (named.Key == name && named.Value.Value is string s && !string.IsNullOrWhiteSpace(s))
+                return s;
         }
         return null;
     }
 
-    static string GetPropertyDescriptionFromAttribute(AttributeSyntax attribute)
+    static int GetNamedInt(AttributeData attr, string name)
     {
-        if (attribute.ArgumentList?.Arguments.Count > 0)
+        foreach (var named in attr.NamedArguments)
         {
-            foreach (var arg in attribute.ArgumentList.Arguments)
+            if (named.Key == name && named.Value.Value is int i)
+                return i;
+        }
+        return 0;
+    }
+
+    static ImmutableArray<string> GetStringArrayArg(AttributeData attr, int index, string name)
+    {
+        var arg = default(TypedConstant);
+        var found = false;
+
+        if (attr.ConstructorArguments.Length > index && attr.ConstructorArguments[index].Kind == TypedConstantKind.Array)
+        {
+            arg = attr.ConstructorArguments[index];
+            found = true;
+        }
+        else
+        {
+            foreach (var named in attr.NamedArguments)
             {
-                if (arg.NameColon?.Name.Identifier.ValueText == "description")
+                if (named.Key == name && named.Value.Kind == TypedConstantKind.Array)
                 {
-                    if (arg.Expression is LiteralExpressionSyntax literal &&
-                        literal.Token.IsKind(SyntaxKind.StringLiteralToken))
-                        return literal.Token.ValueText;
-                    return null;
+                    arg = named.Value;
+                    found = true;
+                    break;
                 }
             }
-
-            // Positional: description is 1st param on ShellPropertyAttribute
-            var firstArg = attribute.ArgumentList.Arguments[0];
-            if (firstArg.NameColon == null &&
-                firstArg.Expression is LiteralExpressionSyntax firstLiteral &&
-                firstLiteral.Token.IsKind(SyntaxKind.StringLiteralToken))
-                return firstLiteral.Token.ValueText;
         }
-        return null;
+
+        if (!found || arg.IsNull)
+            return ImmutableArray<string>.Empty;
+
+        var builder = ImmutableArray.CreateBuilder<string>();
+        foreach (var item in arg.Values)
+        {
+            if (item.Value is string s && !string.IsNullOrWhiteSpace(s))
+                builder.Add(s.Trim());
+        }
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -292,103 +321,58 @@ public class ShinyShellGenerator : IIncrementalGenerator
         return null;
     }
 
-    static ImmutableArray<ShellPropertyInfo> GetShellProperties(ClassDeclarationSyntax classDeclaration, SemanticModel semanticModel)
+    static ImmutableArray<ShellPropertyInfo> GetShellProperties(INamedTypeSymbol viewModelSymbol)
     {
         var properties = ImmutableArray.CreateBuilder<ShellPropertyInfo>();
-        
-        foreach (var member in classDeclaration.Members.OfType<PropertyDeclarationSyntax>())
+
+        foreach (var member in viewModelSymbol.GetMembers())
         {
-            foreach (var attributeList in member.AttributeLists)
+            if (member is not IPropertySymbol propertySymbol)
+                continue;
+
+            AttributeData? shellProperty = null;
+            foreach (var attr in propertySymbol.GetAttributes())
             {
-                foreach (var attribute in attributeList.Attributes)
+                if (attr.AttributeClass?.Name == "ShellPropertyAttribute")
                 {
-                    var symbolInfo = semanticModel.GetSymbolInfo(attribute);
-                    if (symbolInfo.Symbol is IMethodSymbol attributeSymbol &&
-                        attributeSymbol.ContainingType.Name == "ShellPropertyAttribute")
-                    {
-                        var isRequired = GetIsRequiredFromAttribute(attribute);
-                        var propDescription = GetPropertyDescriptionFromAttribute(attribute);
-                        var propertySymbol = semanticModel.GetDeclaredSymbol(member) as IPropertySymbol;
-
-                        if (propertySymbol != null)
-                        {
-                            // Check if property has public get/set
-                            var hasPublicGetter = propertySymbol.GetMethod?.DeclaredAccessibility == Accessibility.Public;
-                            var hasPublicSetter = propertySymbol.SetMethod?.DeclaredAccessibility == Accessibility.Public;
-
-                            if (!hasPublicGetter || !hasPublicSetter)
-                            {
-                                // This would ideally be a diagnostic error, but for now we'll skip
-                                continue;
-                            }
-                            else
-                            {
-                                var typeSymbol = propertySymbol.Type;
-                                var enumType = typeSymbol.TypeKind == TypeKind.Enum
-                                    ? (INamedTypeSymbol)typeSymbol
-                                    : typeSymbol is INamedTypeSymbol { IsGenericType: true, ConstructedFrom.SpecialType: SpecialType.System_Nullable_T } nullableType &&
-                                      nullableType.TypeArguments[0].TypeKind == TypeKind.Enum
-                                        ? (INamedTypeSymbol)nullableType.TypeArguments[0]
-                                        : null;
-
-                                var enumValues = enumType != null
-                                    ? enumType.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue).Select(f => f.Name).ToImmutableArray()
-                                    : ImmutableArray<string>.Empty;
-
-                                properties.Add(new ShellPropertyInfo(
-                                    member.Identifier.ValueText,
-                                    propertySymbol.Type.ToDisplayString(),
-                                    isRequired,
-                                    propDescription,
-                                    enumType != null,
-                                    enumValues
-                                ));
-                            }
-                        }
-                    }
+                    shellProperty = attr;
+                    break;
                 }
             }
+            if (shellProperty == null)
+                continue;
+
+            // Navigation assigns these from outside the viewmodel, so both accessors must be
+            // public. Anything else is silently skipped rather than reported - see SHINY009.
+            if (propertySymbol.GetMethod?.DeclaredAccessibility != Accessibility.Public ||
+                propertySymbol.SetMethod?.DeclaredAccessibility != Accessibility.Public)
+                continue;
+
+            var typeSymbol = propertySymbol.Type;
+            var enumType = typeSymbol.TypeKind == TypeKind.Enum
+                ? (INamedTypeSymbol)typeSymbol
+                : typeSymbol is INamedTypeSymbol { IsGenericType: true, ConstructedFrom.SpecialType: SpecialType.System_Nullable_T } nullableType &&
+                  nullableType.TypeArguments[0].TypeKind == TypeKind.Enum
+                    ? (INamedTypeSymbol)nullableType.TypeArguments[0]
+                    : null;
+
+            var enumValues = enumType != null
+                ? enumType.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue).Select(f => f.Name).ToImmutableArray()
+                : ImmutableArray<string>.Empty;
+
+            properties.Add(new ShellPropertyInfo(
+                propertySymbol.Name,
+                typeSymbol.ToDisplayString(),
+                GetBoolArg(shellProperty, 1, "required", true),
+                GetStringArg(shellProperty, 0, "description"),
+                enumType != null,
+                enumValues
+            ));
         }
-        
+
         return properties.ToImmutable();
     }
 
-    static bool GetIsRequiredFromAttribute(AttributeSyntax attribute)
-    {
-        if (attribute.ArgumentList?.Arguments.Count > 0)
-        {
-            // Check named argument first
-            foreach (var arg in attribute.ArgumentList.Arguments)
-            {
-                if (arg.NameColon?.Name.Identifier.ValueText == "required")
-                {
-                    if (arg.Expression is LiteralExpressionSyntax literal)
-                    {
-                        if (literal.Token.IsKind(SyntaxKind.TrueKeyword))
-                            return true;
-                        if (literal.Token.IsKind(SyntaxKind.FalseKeyword))
-                            return false;
-                    }
-                }
-            }
-
-            // Positional: required is 2nd param (index 1) on ShellPropertyAttribute
-            for (int i = 0; i < attribute.ArgumentList.Arguments.Count; i++)
-            {
-                var arg = attribute.ArgumentList.Arguments[i];
-                if (arg.NameColon != null)
-                    continue;
-
-                if (arg.Expression is LiteralExpressionSyntax literal &&
-                    (literal.Token.IsKind(SyntaxKind.TrueKeyword) || literal.Token.IsKind(SyntaxKind.FalseKeyword)))
-                {
-                    return literal.Token.IsKind(SyntaxKind.TrueKeyword);
-                }
-            }
-        }
-        // Default value is true according to the attribute definition
-        return true;
-    }
 
     static void GenerateCode(SourceProductionContext context, ImmutableArray<ShellMapInfo?> classes, GeneratorOptions options, bool hasAiPackage)
     {
@@ -439,6 +423,9 @@ public class ShinyShellGenerator : IIncrementalGenerator
             }
         }
 
+        ValidateAppLinks(context, filtered, options);
+        ValidateAppShortcuts(context, filtered);
+
         // Generate AddGeneratedMaps and nav extensions only if enabled
         if (options.GenerateNavExtensions)
         {
@@ -446,6 +433,7 @@ public class ShinyShellGenerator : IIncrementalGenerator
             GenerateNavigationExtensions(context, filtered);
             GenerateNavigationBuilderNavExtensions(context, filtered);
             GenerateDialogExtensions(context, filtered);
+            GenerateAppLinkUriExtensions(context, filtered, options);
         }
         else
         {
@@ -464,6 +452,370 @@ public class ShinyShellGenerator : IIncrementalGenerator
         // Generate Routes class only if enabled
         if (options.GenerateRouteConstants)
             GenerateRoutesClass(context, filtered);
+    }
+
+    static string[] SplitTemplate(string template)
+        => template.Trim('/').Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+    static bool IsToken(string segment)
+        => segment.Length > 1 && segment[0] == '{' && segment[segment.Length - 1] == '}';
+
+    static string TokenName(string segment)
+        => segment.Substring(1, segment.Length - 2);
+
+    /// <summary>
+    /// Two templates are ambiguous only when they have the same shape - same length, tokens in the
+    /// same positions, identical literals. Overlaps like "product/featured" vs "product/{id}" are
+    /// resolved deterministically at runtime by specificity, so they are not reported.
+    /// </summary>
+    static bool SameShape(string[] a, string[] b)
+    {
+        if (a.Length != b.Length)
+            return false;
+
+        for (var i = 0; i < a.Length; i++)
+        {
+            var aToken = IsToken(a[i]);
+            if (aToken != IsToken(b[i]))
+                return false;
+
+            if (!aToken && !string.Equals(a[i], b[i], StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        return true;
+    }
+
+    static void ValidateAppLinks(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes, GeneratorOptions options)
+    {
+        var withLinks = classes.Where(c => !c.AppLinks.IsDefaultOrEmpty).ToList();
+        if (withLinks.Count == 0)
+            return;
+
+        var total = withLinks.Sum(c => c.AppLinks.Length);
+        if (string.IsNullOrWhiteSpace(options.AppLinkSchemes) && string.IsNullOrWhiteSpace(options.AppLinkDomains))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(AppLinkNoSchemeOrDomain, Location.None, total));
+        }
+
+        var seen = new System.Collections.Generic.List<(string Template, string Route, string[] Segments)>();
+
+        foreach (var cls in withLinks)
+        {
+            foreach (var template in cls.AppLinks)
+            {
+                var segments = SplitTemplate(template);
+
+                foreach (var segment in segments)
+                {
+                    if (!IsToken(segment))
+                        continue;
+
+                    var token = TokenName(segment);
+                    var prop = cls.Properties.FirstOrDefault(p => string.Equals(p.Name, token, StringComparison.OrdinalIgnoreCase));
+                    if (prop == null)
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            AppLinkTokenNotFound, cls.AttributeLocation, template, token, cls.ViewModelName));
+                    }
+                    else if (GetAppLinkParse(prop, "s", "v") == null && !IsStringType(prop))
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            AppLinkUnsupportedType, cls.AttributeLocation, prop.Name, prop.TypeName, template));
+                    }
+                }
+
+                foreach (var prop in cls.Properties.Where(p => p.IsRequired))
+                {
+                    var inPath = segments.Any(x => IsToken(x) && string.Equals(TokenName(x), prop.Name, StringComparison.OrdinalIgnoreCase));
+                    if (!inPath)
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            AppLinkRequiredNotInPath, cls.AttributeLocation, prop.Name, template));
+                    }
+
+                    // A required property still has to be convertible even when it arrives via query.
+                    if (GetAppLinkParse(prop, "s", "v") == null && !IsStringType(prop))
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            AppLinkUnsupportedType, cls.AttributeLocation, prop.Name, prop.TypeName, template));
+                    }
+                }
+
+                foreach (var prior in seen)
+                {
+                    if (SameShape(prior.Segments, segments))
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            AppLinkAmbiguousTemplate, cls.AttributeLocation, template, cls.Route, prior.Template, prior.Route));
+                    }
+                }
+                seen.Add((template, cls.Route, segments));
+            }
+        }
+    }
+
+    static bool IsStringType(ShellPropertyInfo prop)
+    {
+        var baseType = prop.TypeName.EndsWith("?") ? prop.TypeName.Substring(0, prop.TypeName.Length - 1) : prop.TypeName;
+        return !prop.IsEnum && (baseType == "string" || baseType == "System.String");
+    }
+
+    /// <summary>
+    /// A TryParse-shaped test for one app link value. Returns null when the type has no supported
+    /// conversion (SHINY006) or is a string, which needs no parse at all.
+    /// </summary>
+    static string? GetAppLinkParse(ShellPropertyInfo prop, string source, string target)
+    {
+        const string Invariant = "global::System.Globalization.CultureInfo.InvariantCulture";
+        var typeName = prop.TypeName;
+        var baseType = typeName.EndsWith("?") ? typeName.Substring(0, typeName.Length - 1) : typeName;
+
+        if (prop.IsEnum)
+            return $"global::System.Enum.TryParse<global::{baseType}>({source}, true, out var {target})";
+
+        return baseType switch
+        {
+            "int" or "System.Int32" => $"global::System.Int32.TryParse({source}, {Invariant}, out var {target})",
+            "long" or "System.Int64" => $"global::System.Int64.TryParse({source}, {Invariant}, out var {target})",
+            "short" or "System.Int16" => $"global::System.Int16.TryParse({source}, {Invariant}, out var {target})",
+            "byte" or "System.Byte" => $"global::System.Byte.TryParse({source}, {Invariant}, out var {target})",
+            "sbyte" or "System.SByte" => $"global::System.SByte.TryParse({source}, {Invariant}, out var {target})",
+            "uint" or "System.UInt32" => $"global::System.UInt32.TryParse({source}, {Invariant}, out var {target})",
+            "ulong" or "System.UInt64" => $"global::System.UInt64.TryParse({source}, {Invariant}, out var {target})",
+            "ushort" or "System.UInt16" => $"global::System.UInt16.TryParse({source}, {Invariant}, out var {target})",
+            "float" or "System.Single" => $"global::System.Single.TryParse({source}, {Invariant}, out var {target})",
+            "double" or "System.Double" => $"global::System.Double.TryParse({source}, {Invariant}, out var {target})",
+            "decimal" or "System.Decimal" => $"global::System.Decimal.TryParse({source}, {Invariant}, out var {target})",
+            "bool" or "System.Boolean" => $"global::System.Boolean.TryParse({source}, out var {target})",
+            "System.Guid" => $"global::System.Guid.TryParse({source}, out var {target})",
+            "System.DateTime" => $"global::System.DateTime.TryParse({source}, {Invariant}, out var {target})",
+            "System.DateTimeOffset" => $"global::System.DateTimeOffset.TryParse({source}, {Invariant}, out var {target})",
+            "System.DateOnly" => $"global::System.DateOnly.TryParse({source}, {Invariant}, out var {target})",
+            "System.TimeOnly" => $"global::System.TimeOnly.TryParse({source}, {Invariant}, out var {target})",
+            "System.TimeSpan" => $"global::System.TimeSpan.TryParse({source}, {Invariant}, out var {target})",
+            "System.Uri" => $"global::System.Uri.TryCreate({source}, global::System.UriKind.RelativeOrAbsolute, out var {target})",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Emits the AddAppLink calls for one route. The binder is identical across a route's
+    /// templates - a value is looked up by property name in a case-insensitive dictionary, so a
+    /// path token and a query value of the same name are read the same way.
+    /// </summary>
+    static void GenerateAppLinkRegistrations(StringBuilder sb, ShellMapInfo cls)
+    {
+        foreach (var template in cls.AppLinks)
+        {
+            sb.AppendLine($"        builder.AddAppLink<{cls.ViewModelFullName}>(");
+            sb.AppendLine($"            \"{EscapeString(template)}\",");
+            sb.AppendLine("            static (vm, values) =>");
+            sb.AppendLine("            {");
+
+            var index = 0;
+            foreach (var prop in cls.Properties)
+            {
+                var raw = $"__raw{index}";
+                var parsed = $"__val{index}";
+                index++;
+
+                var parse = GetAppLinkParse(prop, raw, parsed);
+                var isString = IsStringType(prop);
+
+                if (prop.IsRequired)
+                {
+                    if (isString)
+                    {
+                        sb.AppendLine($"                if (!values.TryGetValue(\"{EscapeString(prop.Name)}\", out var {raw}))");
+                        sb.AppendLine("                    return false;");
+                        sb.AppendLine($"                vm.{prop.Name} = {raw};");
+                    }
+                    else if (parse != null)
+                    {
+                        sb.AppendLine($"                if (!values.TryGetValue(\"{EscapeString(prop.Name)}\", out var {raw}) || !{parse})");
+                        sb.AppendLine("                    return false;");
+                        sb.AppendLine($"                vm.{prop.Name} = {parsed};");
+                    }
+                }
+                else
+                {
+                    if (isString)
+                    {
+                        sb.AppendLine($"                if (values.TryGetValue(\"{EscapeString(prop.Name)}\", out var {raw}))");
+                        sb.AppendLine($"                    vm.{prop.Name} = {raw};");
+                    }
+                    else if (parse != null)
+                    {
+                        sb.AppendLine($"                if (values.TryGetValue(\"{EscapeString(prop.Name)}\", out var {raw}) && {parse})");
+                        sb.AppendLine($"                    vm.{prop.Name} = {parsed};");
+                    }
+                }
+            }
+
+            sb.AppendLine("                return true;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        );");
+        }
+    }
+
+    /// <summary>
+    /// Emits Create{Route}AppLink for building an outbound URL - the share-sheet direction. Only
+    /// generated when there is exactly one scheme (or, failing that, exactly one domain), because
+    /// with several configured there is no single correct base to build against.
+    /// </summary>
+    static void GenerateAppLinkUriExtensions(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes, GeneratorOptions options)
+    {
+        var withLinks = classes.Where(c => !c.AppLinks.IsDefaultOrEmpty).ToList();
+        if (withLinks.Count == 0)
+            return;
+
+        var schemes = options.AppLinkSchemes.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+        var domains = options.AppLinkDomains.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+
+        string baseUri;
+        if (schemes.Count == 1)
+            baseUri = schemes[0] + "://";
+        else if (schemes.Count == 0 && domains.Count == 1)
+            baseUri = "https://" + domains[0] + "/";
+        else
+            return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("public static class AppLinkExtensions");
+        sb.AppendLine("{");
+
+        foreach (var cls in withLinks)
+        {
+            var template = cls.AppLinks[0];
+            var segments = SplitTemplate(template);
+            var tokenNames = segments.Where(IsToken).Select(TokenName).ToList();
+
+            var pathProps = new System.Collections.Generic.List<ShellPropertyInfo>();
+            foreach (var token in tokenNames)
+            {
+                var prop = cls.Properties.FirstOrDefault(p => string.Equals(p.Name, token, StringComparison.OrdinalIgnoreCase));
+                if (prop != null)
+                    pathProps.Add(prop);
+            }
+
+            // A token with no matching property is already SHINY005 - don't emit broken code too.
+            if (pathProps.Count != tokenNames.Count)
+                continue;
+
+            var queryProps = cls.Properties.Where(p => !tokenNames.Any(t => string.Equals(t, p.Name, StringComparison.OrdinalIgnoreCase))).ToList();
+
+            sb.AppendLine("    /// <summary>");
+            sb.AppendLine($"    /// Builds the app link URL for '{EscapeXml(cls.Route)}' from template '{EscapeXml(template)}'.");
+            sb.AppendLine("    /// </summary>");
+            sb.Append($"    public static global::System.Uri Create{cls.GeneratedName}AppLink(this global::Shiny.INavigator navigator");
+
+            foreach (var prop in pathProps)
+                sb.Append($", {prop.TypeName} {ToCamelCase(prop.Name)}");
+
+            foreach (var prop in queryProps)
+                sb.Append($", {prop.TypeName} {ToCamelCase(prop.Name)} = {GetDefaultValue(prop.TypeName)}");
+
+            sb.AppendLine(")");
+            sb.AppendLine("    {");
+            sb.AppendLine("        var __sb = new global::System.Text.StringBuilder();");
+            sb.AppendLine($"        __sb.Append(\"{EscapeString(baseUri)}\");");
+
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (i > 0)
+                    sb.AppendLine("        __sb.Append('/');");
+
+                var segment = segments[i];
+                if (IsToken(segment))
+                {
+                    var prop = pathProps.First(p => string.Equals(p.Name, TokenName(segment), StringComparison.OrdinalIgnoreCase));
+                    sb.AppendLine($"        __sb.Append(global::System.Uri.EscapeDataString(global::System.Convert.ToString({ToCamelCase(prop.Name)}, global::System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty));");
+                }
+                else
+                {
+                    sb.AppendLine($"        __sb.Append(\"{EscapeString(segment)}\");");
+                }
+            }
+
+            if (queryProps.Count > 0)
+            {
+                sb.AppendLine("        var __first = true;");
+                foreach (var prop in queryProps)
+                {
+                    var name = ToCamelCase(prop.Name);
+                    sb.AppendLine($"        if (!global::System.Collections.Generic.EqualityComparer<{prop.TypeName}>.Default.Equals({name}, default))");
+                    sb.AppendLine("        {");
+                    sb.AppendLine("            __sb.Append(__first ? '?' : '&');");
+                    sb.AppendLine("            __first = false;");
+                    sb.AppendLine($"            __sb.Append(\"{EscapeString(prop.Name)}=\");");
+                    sb.AppendLine($"            __sb.Append(global::System.Uri.EscapeDataString(global::System.Convert.ToString({name}, global::System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty));");
+                    sb.AppendLine("        }");
+                }
+            }
+
+            sb.AppendLine("        return new global::System.Uri(__sb.ToString());");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("}");
+        context.AddSource("AppLinkExtensions.g.cs", sb.ToString());
+    }
+
+    static void ValidateAppShortcuts(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes)
+    {
+        var declared = 0;
+
+        foreach (var cls in classes)
+        {
+            if (cls.Shortcut == null)
+            {
+                // The other Shortcut* properties mean nothing on their own - a constructor
+                // parameter would have made the title unmissable, a named property cannot.
+                var orphans = new System.Collections.Generic.List<string>();
+                if (cls.ShortcutSubtitle != null) orphans.Add("ShortcutSubtitle");
+                if (cls.ShortcutIcon != null) orphans.Add("ShortcutIcon");
+                if (cls.ShortcutOrder != 0) orphans.Add("ShortcutOrder");
+
+                if (orphans.Count > 0)
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        ShortcutMissingTitle, cls.AttributeLocation, cls.Route, string.Join(", ", orphans)));
+                }
+                continue;
+            }
+
+            declared++;
+
+            foreach (var prop in cls.Properties)
+            {
+                if (prop.IsRequired)
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        ShortcutOnParameterisedRoute, cls.AttributeLocation, cls.Route, prop.Name, cls.ViewModelName));
+                }
+            }
+        }
+
+        if (declared > 4)
+            context.ReportDiagnostic(Diagnostic.Create(TooManyShortcuts, Location.None, declared));
+    }
+
+    /// <summary>
+    /// Emits AddAppShortcut calls - the same public API a consumer calls by hand when source
+    /// generation is turned off, so disabling generation does not take the feature with it.
+    /// </summary>
+    static void GenerateAppShortcutRegistrations(StringBuilder sb, ShellMapInfo cls)
+    {
+        if (cls.Shortcut == null)
+            return;
+
+        sb.Append($"        builder.AddAppShortcut<{cls.ViewModelFullName}>(");
+        sb.Append($"\"{EscapeString(cls.Shortcut)}\"");
+        sb.Append(cls.ShortcutSubtitle != null ? $", \"{EscapeString(cls.ShortcutSubtitle)}\"" : ", null");
+        sb.Append(cls.ShortcutIcon != null ? $", \"{EscapeString(cls.ShortcutIcon)}\"" : ", null");
+        sb.AppendLine($", {cls.ShortcutOrder});");
     }
 
     static void GenerateRoutesClass(SourceProductionContext context, ImmutableArray<ShellMapInfo> classes)
@@ -684,6 +1036,13 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 sb.AppendLine($"        builder.Add<{cls.PageTypeFullName}, {cls.ViewModelFullName}>(\"{cls.Route}\", registerRoute: false);");
             }
         }
+
+        foreach (var cls in classes)
+            GenerateAppLinkRegistrations(sb, cls);
+
+        foreach (var cls in classes.OrderBy(x => x.ShortcutOrder).ThenBy(x => x.Route, StringComparer.Ordinal))
+            GenerateAppShortcutRegistrations(sb, cls);
+
         
         sb.AppendLine("        return builder;");
         sb.AppendLine("    }");
@@ -1063,7 +1422,9 @@ record GeneratorOptions(
     bool GenerateAiExtensions,
     string AiExtensionsClassName,
     string AiNavigateMethodName,
-    string AiToolsClassName
+    string AiToolsClassName,
+    string AppLinkSchemes,
+    string AppLinkDomains
 );
 
 record ShellMapInfo(
@@ -1077,7 +1438,12 @@ record ShellMapInfo(
     string Description,
     ImmutableArray<ShellPropertyInfo> Properties,
     Location? AttributeLocation,
-    string? DialogResultTypeFullName
+    string? DialogResultTypeFullName,
+    ImmutableArray<string> AppLinks,
+    string? Shortcut,
+    string? ShortcutSubtitle,
+    string? ShortcutIcon,
+    int ShortcutOrder
 );
 
 record ShellPropertyInfo(

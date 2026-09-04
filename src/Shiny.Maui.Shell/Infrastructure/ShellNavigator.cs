@@ -202,6 +202,45 @@ public class ShinyShellNavigator(
     }
 
     
+    /// <summary>
+    /// Navigation core shared with <see cref="AppLinkRouter"/>. The ViewModel arrives already
+    /// resolved and populated, so this only pins it and issues the Shell navigation - which keeps
+    /// app links on the exact same path as <see cref="NavigateTo{TViewModel}"/> instead of opening
+    /// a second one that would have to rediscover its Android timing behaviour.
+    /// </summary>
+    /// <param name="viewModelType">The ViewModel type to pin for the apply sites.</param>
+    /// <param name="viewModel">The populated ViewModel instance.</param>
+    /// <param name="route">An absolute ("//"-prefixed) or relative route.</param>
+    internal async Task NavigateToAppLink(Type viewModelType, object viewModel, string route)
+    {
+        var parameters = new Dictionary<string, object>();
+        if (Shell.Current.CurrentPage?.BindingContext is INavigationAware navAware)
+            navAware.OnNavigatingFrom(parameters);
+
+        var navType = route.StartsWith("//", StringComparison.Ordinal)
+            ? NavigationType.SetRoot
+            : NavigationType.Push;
+
+        this.RaiseNavigating(Shell.Current, route, navType, parameters);
+        this.isProgrammaticNavigation = true;
+
+        var subscription = configurator.EnqueueResolved(viewModelType, viewModel);
+        try
+        {
+            await mainThread
+                .InvokeOnMainThreadAsync(() => Shell.Current.GoToAsync(route, true, parameters))
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Only roll back on failure - on success the apply site has not fired yet and
+            // disposing would throw away the populated instance.
+            subscription.Dispose();
+            throw;
+        }
+    }
+
+
     public async Task<DialogResult<T>> ShowDialog<TViewModel, T>(
         Action<TViewModel>? configure = null,
         CancellationToken cancellationToken = default

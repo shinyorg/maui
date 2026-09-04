@@ -1,8 +1,8 @@
 ﻿<Solution>
     <Folder Name="/Solution/">
         <File Path="readme.md" />
-        <File Path="Directory.build.props" />
-        <File Path="Directory.build.targets" />
+        <File Path="Directory.Build.props" />
+        <File Path="Directory.Build.targets" />
         <File Path="LICENSE" />
         <File Path="version.json" />
         <File Path=".github\workflows\build.yml" />
@@ -11,7 +11,7 @@
         <File Path=".github\ISSUE_TEMPLATE\feature_request.yml" />
         <File Path=".github\workflows\sync-skills.yml" />
         <File Path="Build.slnf" />
-        <File Path="Directory.packages.props" />
+        <File Path="Directory.Packages.props" />
     </Folder>
     <Project Path="Sample\Sample.csproj" />
     <Project Path="src\Shiny.Maui.Shell.ShinyDialogs\Shiny.Maui.Shell.ShinyDialogs.csproj" />

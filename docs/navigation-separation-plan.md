@@ -294,7 +294,7 @@ Phase 0 is separable and non-breaking — it can land on its own. Everything fro
 1. **`readme.md`** — the trial's "Which package?" comparison table (keep it; it's good), a `Shiny.Maui.Core`
    line, the new dialog package names, and the `INavigator`/`IShellNavigator` migration note.
 2. **Per-project readmes** — `src/Shiny.Maui.Core/readme.md` and `src/Shiny.Maui.Navigation/readme.md` pack
-   into their own packages via the `Directory.build.targets` conditional the trial added (keep that).
+   into their own packages via the `Directory.Build.targets` conditional the trial added (keep that).
 3. **Skill** — `skills/shiny-maui-navigation/` as a second skill (the trial drafted 357 lines); the existing
    `shiny-maui-shell` skill gains a "you may want the Navigation package instead" pointer and drops
    `ShellMap`-only vocabulary in favour of `PageMap` with the alias noted.

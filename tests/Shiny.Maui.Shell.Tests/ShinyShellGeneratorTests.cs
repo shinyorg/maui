@@ -19,7 +19,11 @@ namespace Shiny
     [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
     public sealed class ShellMapAttribute<TPage> : Attribute
     {
-        public ShellMapAttribute(string route = null, bool registerRoute = true, string description = null) { }
+        public ShellMapAttribute(string route = null, bool registerRoute = true, string description = null, string[] appLinks = null) { }
+        public string Shortcut { get; set; }
+        public string ShortcutSubtitle { get; set; }
+        public string ShortcutIcon { get; set; }
+        public int ShortcutOrder { get; set; }
     }
 
     [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
@@ -61,6 +65,8 @@ namespace Shiny
     public sealed class ShinyAppBuilder
     {
         public ShinyAppBuilder Add<TPage, TViewModel>(string route = null, bool registerRoute = true) => this;
+        public ShinyAppBuilder AddAppLink<TViewModel>(string template, System.Func<TViewModel, System.Collections.Generic.IReadOnlyDictionary<string, string>, bool> apply) where TViewModel : class => this;
+        public ShinyAppBuilder AddAppShortcut<TViewModel>(string title, string subtitle = null, string icon = null, int order = 0, string id = null, System.Action<TViewModel> configure = null) where TViewModel : class => this;
     }
 }
 
@@ -1560,6 +1566,509 @@ namespace TestApp
     #endregion
 
     #region Helpers
+
+
+    #region App Links
+
+    const string AppLinkPage = @"
+namespace TestApp
+{
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+}";
+
+    static string AppLinkSource(string attribute, string properties) => StubTypes + @"
+namespace TestApp
+{
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+
+    " + attribute + @"
+    public class ProductViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        " + properties + @"
+    }
+}";
+
+    [Fact]
+    public void AppLinks_NoTemplates_EmitsNoRegistration()
+    {
+        var result = RunGenerator(AppLinkSource("[ShellMap<ProductPage>]", ""));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldNotContain("AddAppLink");
+    }
+
+    [Fact]
+    public void AppLinks_SingleTemplate_EmitsRegistration()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(@"builder.AddAppLink<TestApp.ProductViewModel>(");
+        maps.ShouldContain(@"""product/{id}""");
+    }
+
+    [Fact]
+    public void AppLinks_CollectionExpressionArgument_IsReadTheSameAsArrayCreation()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: [""product/{id}""])]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(@"""product/{id}""");
+    }
+
+    [Fact]
+    public void AppLinks_MultipleTemplates_EmitOneRegistrationEach()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"", ""p/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(@"""product/{id}""");
+        maps.ShouldContain(@"""p/{id}""");
+    }
+
+    [Fact]
+    public void AppLinks_RequiredValue_FailsTheBindWhenMissing()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        // A miss returns false so the router can fall through to the next template
+        maps.ShouldContain("return false;");
+        maps.ShouldContain(@"values.TryGetValue(""Id"", out var __raw0)");
+    }
+
+    [Fact]
+    public void AppLinks_OptionalValue_IsAppliedOnlyWhenPresent()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }
+              [ShellProperty(required: false)] public string? Tab { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(@"if (values.TryGetValue(""Tab"", out var __raw1))");
+    }
+
+    [Theory]
+    [InlineData("int", "global::System.Int32.TryParse")]
+    [InlineData("long", "global::System.Int64.TryParse")]
+    [InlineData("double", "global::System.Double.TryParse")]
+    [InlineData("decimal", "global::System.Decimal.TryParse")]
+    [InlineData("bool", "global::System.Boolean.TryParse")]
+    [InlineData("System.Guid", "global::System.Guid.TryParse")]
+    [InlineData("System.DateTime", "global::System.DateTime.TryParse")]
+    [InlineData("System.TimeSpan", "global::System.TimeSpan.TryParse")]
+    public void AppLinks_TypedValue_UsesTryParse(string type, string expected)
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{value}"" })]",
+            $"[ShellProperty] public {type} Value {{ get; set; }}");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(expected);
+    }
+
+    [Fact]
+    public void AppLinks_NumericValue_ParsesWithInvariantCulture()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{price}"" })]",
+            @"[ShellProperty] public decimal Price { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        // A URL is not culture-sensitive - a German device must not reject "1.5"
+        maps.ShouldContain("global::System.Globalization.CultureInfo.InvariantCulture");
+    }
+
+    [Fact]
+    public void AppLinks_EnumValue_ParsesCaseInsensitively()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public enum Mode { Compact, Full }
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<ProductPage>(appLinks: new[] { ""product/{mode}"" })]
+    public class ProductViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        [ShellProperty] public Mode Mode { get; set; }
+    }
+}";
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain("global::System.Enum.TryParse<global::TestApp.Mode>");
+        maps.ShouldContain(", true, out var");
+    }
+
+    [Fact]
+    public void AppLinks_TokenWithoutMatchingProperty_ReportsShiny005()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{missing}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY005");
+    }
+
+    [Fact]
+    public void AppLinks_UnconvertibleType_ReportsShiny006()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public class Complex { }
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<ProductPage>(appLinks: new[] { ""product/{thing}"" })]
+    public class ProductViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        [ShellProperty] public Complex Thing { get; set; }
+    }
+}";
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY006");
+    }
+
+    [Fact]
+    public void AppLinks_SameShapeTemplates_ReportShiny007()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+    public class OrderPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<ProductPage>(appLinks: new[] { ""item/{id}"" })]
+    public class ProductViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        [ShellProperty] public int Id { get; set; }
+    }
+
+    [ShellMap<OrderPage>(appLinks: new[] { ""item/{id}"" })]
+    public class OrderViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        [ShellProperty] public int Id { get; set; }
+    }
+}";
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY007");
+    }
+
+    [Fact]
+    public void AppLinks_OverlappingButDifferentSpecificity_IsNotAmbiguous()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public class ProductPage : Microsoft.Maui.Controls.Page { }
+    public class FeaturedPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]
+    public class ProductViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        [ShellProperty] public int Id { get; set; }
+    }
+
+    [ShellMap<FeaturedPage>(appLinks: new[] { ""product/featured"" })]
+    public class FeaturedViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+}";
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        // Runtime specificity ordering resolves these deterministically
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY007");
+    }
+
+    [Fact]
+    public void AppLinks_NoSchemeOrDomain_ReportsShiny008()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source);
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY008");
+    }
+
+    [Fact]
+    public void AppLinks_SchemeConfigured_DoesNotReportShiny008()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY008");
+    }
+
+    [Fact]
+    public void AppLinks_RequiredPropertyNotInPath_ReportsShiny009()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(appLinks: new[] { ""product"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY009");
+    }
+
+    [Fact]
+    public void AppLinkUri_SingleScheme_GeneratesBuilder()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(""Product"", appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp"));
+        var uris = GetGeneratedSource(result, "AppLinkExtensions.g.cs");
+
+        uris.ShouldContain("CreateProductAppLink");
+        uris.ShouldContain(@"__sb.Append(""myapp://"");");
+    }
+
+    [Fact]
+    public void AppLinkUri_OnlyDomain_UsesHttps()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(""Product"", appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkDomains", "shinylib.net"));
+        var uris = GetGeneratedSource(result, "AppLinkExtensions.g.cs");
+
+        uris.ShouldContain(@"__sb.Append(""https://shinylib.net/"");");
+    }
+
+    [Fact]
+    public void AppLinkUri_MultipleSchemes_GeneratesNothing()
+    {
+        var source = AppLinkSource(
+            @"[ShellMap<ProductPage>(""Product"", appLinks: new[] { ""product/{id}"" })]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source, ("ShinyAppLinkSchemes", "myapp;other"));
+
+        // No single correct base to build against
+        GetGeneratedSourceOrDefault(result, "AppLinkExtensions.g.cs").ShouldBeNull();
+    }
+
+    #endregion
+
+
+    #region App Shortcuts
+
+    static string ShortcutSource(string attribute, string properties = "") => StubTypes + @"
+namespace TestApp
+{
+    public class SearchPage : Microsoft.Maui.Controls.Page { }
+
+    " + attribute + @"
+    public class SearchViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        " + properties + @"
+    }
+}";
+
+    [Fact]
+    public void Shortcut_NotDeclared_EmitsNothing()
+    {
+        var result = RunGenerator(ShortcutSource("[ShellMap<SearchPage>]"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldNotContain("AddAppShortcut");
+    }
+
+    [Fact]
+    public void Shortcut_Declared_EmitsRegistrationCall()
+    {
+        var source = ShortcutSource(
+            @"[ShellMap<SearchPage>(Shortcut = ""Search"", ShortcutSubtitle = ""Find anything"", ShortcutIcon = ""search"", ShortcutOrder = 2)]");
+
+        var result = RunGenerator(source);
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        // Emits a call to the same public API a consumer uses by hand
+        maps.ShouldContain(@"builder.AddAppShortcut<TestApp.SearchViewModel>(""Search"", ""Find anything"", ""search"", 2);");
+    }
+
+    [Fact]
+    public void Shortcut_OnlyTitle_PassesNullsForTheRest()
+    {
+        var result = RunGenerator(ShortcutSource(@"[ShellMap<SearchPage>(Shortcut = ""Search"")]"));
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.ShouldContain(@"builder.AddAppShortcut<TestApp.SearchViewModel>(""Search"", null, null, 0);");
+    }
+
+    [Fact]
+    public void Shortcut_OnRouteWithRequiredProperty_ReportsShiny010()
+    {
+        var source = ShortcutSource(
+            @"[ShellMap<SearchPage>(Shortcut = ""Search"")]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source);
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY010");
+    }
+
+    [Fact]
+    public void Shortcut_OnRouteWithOnlyOptionalProperties_IsAllowed()
+    {
+        var source = ShortcutSource(
+            @"[ShellMap<SearchPage>(Shortcut = ""Search"")]",
+            @"[ShellProperty(required: false)] public string? Filter { get; set; }");
+
+        var result = RunGenerator(source);
+
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY010");
+    }
+
+    [Fact]
+    public void Shortcut_RequiredPropertyOnRouteWithoutShortcut_IsNotReported()
+    {
+        // SHINY010 is about the shortcut, not the route - a parameterised route is perfectly fine
+        var source = ShortcutSource(
+            "[ShellMap<SearchPage>]",
+            @"[ShellProperty] public int Id { get; set; }");
+
+        var result = RunGenerator(source);
+
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY010");
+    }
+
+    [Theory]
+    [InlineData(@"ShortcutSubtitle = ""Find anything""")]
+    [InlineData(@"ShortcutIcon = ""search""")]
+    [InlineData("ShortcutOrder = 3")]
+    public void Shortcut_PropertyWithoutTitle_ReportsShiny012(string property)
+    {
+        var result = RunGenerator(ShortcutSource($"[ShellMap<SearchPage>({property})]"));
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY012");
+    }
+
+    [Fact]
+    public void Shortcut_TitleWithOtherProperties_DoesNotReportShiny012()
+    {
+        var result = RunGenerator(ShortcutSource(
+            @"[ShellMap<SearchPage>(Shortcut = ""Search"", ShortcutIcon = ""search"")]"));
+
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY012");
+    }
+
+    [Fact]
+    public void Shortcut_MoreThanFour_ReportsShiny011()
+    {
+        var sb = new System.Text.StringBuilder(StubTypes);
+        sb.AppendLine("namespace TestApp {");
+        for (var i = 0; i < 5; i++)
+        {
+            sb.AppendLine($@"
+    public class P{i} : Microsoft.Maui.Controls.Page {{ }}
+    [ShellMap<P{i}>(Shortcut = ""S{i}"")]
+    public class Vm{i} : System.ComponentModel.INotifyPropertyChanged
+    {{
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }}");
+        }
+        sb.AppendLine("}");
+
+        var result = RunGenerator(sb.ToString());
+
+        result.Diagnostics.ShouldContain(d => d.Id == "SHINY011");
+    }
+
+    [Fact]
+    public void Shortcut_ExactlyFour_DoesNotReportShiny011()
+    {
+        var sb = new System.Text.StringBuilder(StubTypes);
+        sb.AppendLine("namespace TestApp {");
+        for (var i = 0; i < 4; i++)
+        {
+            sb.AppendLine($@"
+    public class P{i} : Microsoft.Maui.Controls.Page {{ }}
+    [ShellMap<P{i}>(Shortcut = ""S{i}"")]
+    public class Vm{i} : System.ComponentModel.INotifyPropertyChanged
+    {{
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }}");
+        }
+        sb.AppendLine("}");
+
+        var result = RunGenerator(sb.ToString());
+
+        result.Diagnostics.ShouldNotContain(d => d.Id == "SHINY011");
+    }
+
+    [Fact]
+    public void Shortcut_EmittedInShortcutOrder()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public class APage : Microsoft.Maui.Controls.Page { }
+    public class BPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<APage>(Shortcut = ""Second"", ShortcutOrder = 5)]
+    public class AViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    [ShellMap<BPage>(Shortcut = ""First"", ShortcutOrder = 1)]
+    public class BViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+}";
+        var result = RunGenerator(source);
+        var maps = GetGeneratedSource(result, "NavigationBuilderExtensions.g.cs");
+
+        maps.IndexOf(@"""First""").ShouldBeLessThan(maps.IndexOf(@"""Second"""));
+    }
+
+    #endregion
 
     static GeneratorRunResult RunGenerator(string source, params (string Key, string Value)[] buildProperties)
     {

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Universal links. Each domain also needs an apple-app-site-association file served from
+	     https://<domain>/.well-known/apple-app-site-association, and the App ID needs the
+	     Associated Domains capability enabled in the Apple Developer portal. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:shinylib.net</string>
+		<string>applinks:www.shinylib.net</string>
+	</array>
+</dict>
+</plist>

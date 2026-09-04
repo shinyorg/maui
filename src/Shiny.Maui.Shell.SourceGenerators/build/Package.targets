@@ -7,5 +7,88 @@
         <CompilerVisibleProperty Include="ShinyMauiShell_AiExtensionsClassName" />
         <CompilerVisibleProperty Include="ShinyMauiShell_AiNavigateMethodName" />
         <CompilerVisibleProperty Include="ShinyMauiShell_AiToolsClassName" />
+        <CompilerVisibleProperty Include="ShinyAppLinkSchemes" />
+        <CompilerVisibleProperty Include="ShinyAppLinkDomains" />
     </ItemGroup>
+
+    <!--
+    App link manifest validation.
+
+    These emit warnings carrying the exact markup to paste rather than editing the app's manifests.
+    Nothing here can be fully automated:
+
+      * Android's merged manifest names the launcher activity with a CRC64 hash of its namespace
+        (crc64<hash>.MainActivity), which MSBuild cannot compute - so an AndroidManifestOverlay has
+        nothing stable to merge onto and would add a second activity instead of amending the real
+        one. Adding [IntentFilter] to MainActivity is the documented .NET MAUI route.
+      * Apple universal links additionally need an apple-app-site-association file on the domain and
+        the Associated Domains capability on the App ID - neither reachable from a build.
+
+    Set ShinyAppLinkValidation=false to silence all of them.
+    -->
+    <PropertyGroup>
+        <ShinyAppLinkValidation Condition="'$(ShinyAppLinkValidation)' == ''">true</ShinyAppLinkValidation>
+    </PropertyGroup>
+
+    <Target Name="ShinyAppLinksValidate"
+            BeforeTargets="Build"
+            Condition="'$(ShinyAppLinkValidation)' == 'true' AND ('$(ShinyAppLinkSchemes)' != '' OR '$(ShinyAppLinkDomains)' != '')">
+
+        <ItemGroup>
+            <_ShinyAppLinkScheme Include="$(ShinyAppLinkSchemes)" />
+            <_ShinyAppLinkDomain Include="$(ShinyAppLinkDomains)" />
+        </ItemGroup>
+
+        <!-- APPLE -->
+        <PropertyGroup Condition="'$(TargetPlatformIdentifier)' == 'ios' OR '$(TargetPlatformIdentifier)' == 'maccatalyst'">
+            <_ShinyApplePlatformDir Condition="'$(TargetPlatformIdentifier)' == 'ios'">$(MSBuildProjectDirectory)/Platforms/iOS</_ShinyApplePlatformDir>
+            <_ShinyApplePlatformDir Condition="'$(TargetPlatformIdentifier)' == 'maccatalyst'">$(MSBuildProjectDirectory)/Platforms/MacCatalyst</_ShinyApplePlatformDir>
+            <_ShinyAppleInfoPlist>$(_ShinyApplePlatformDir)/Info.plist</_ShinyAppleInfoPlist>
+            <_ShinyAppleEntitlements>$(_ShinyApplePlatformDir)/Entitlements.plist</_ShinyAppleEntitlements>
+            <_ShinyAppleInfoText Condition="$([System.IO.File]::Exists('$(_ShinyAppleInfoPlist)'))">$([System.IO.File]::ReadAllText('$(_ShinyAppleInfoPlist)'))</_ShinyAppleInfoText>
+            <_ShinyAppleEntitlementsText Condition="$([System.IO.File]::Exists('$(_ShinyAppleEntitlements)'))">$([System.IO.File]::ReadAllText('$(_ShinyAppleEntitlements)'))</_ShinyAppleEntitlementsText>
+        </PropertyGroup>
+
+        <Warning Code="SHINY103"
+                 Condition="'$(_ShinyAppleInfoText)' != '' AND !$([System.String]::Copy('$(_ShinyAppleInfoText)').Contains('%(_ShinyAppLinkScheme.Identity)'))"
+                 Text="App links: $(_ShinyAppleInfoPlist) does not register scheme '%(_ShinyAppLinkScheme.Identity)'. Add before the closing &lt;/dict&gt;: &lt;key&gt;CFBundleURLTypes&lt;/key&gt;&lt;array&gt;&lt;dict&gt;&lt;key&gt;CFBundleTypeRole&lt;/key&gt;&lt;string&gt;Editor&lt;/string&gt;&lt;key&gt;CFBundleURLName&lt;/key&gt;&lt;string&gt;$(ApplicationId)&lt;/string&gt;&lt;key&gt;CFBundleURLSchemes&lt;/key&gt;&lt;array&gt;&lt;string&gt;%(_ShinyAppLinkScheme.Identity)&lt;/string&gt;&lt;/array&gt;&lt;/dict&gt;&lt;/array&gt;" />
+
+        <Warning Code="SHINY104"
+                 Condition="'$(ShinyAppLinkDomains)' != '' AND ('$(TargetPlatformIdentifier)' == 'ios' OR '$(TargetPlatformIdentifier)' == 'maccatalyst') AND '$(_ShinyAppleEntitlementsText)' == ''"
+                 Text="App links: $(_ShinyAppleEntitlements) does not exist, so universal links for '$(ShinyAppLinkDomains)' cannot work. Create it - the SDK picks it up automatically, no CodesignEntitlements property needed - containing: &lt;key&gt;com.apple.developer.associated-domains&lt;/key&gt;&lt;array&gt;@(_ShinyAppLinkDomain->'&lt;string&gt;applinks:%(Identity)&lt;/string&gt;', '')&lt;/array&gt;" />
+
+        <Warning Code="SHINY104"
+                 Condition="'$(_ShinyAppleEntitlementsText)' != '' AND !$([System.String]::Copy('$(_ShinyAppleEntitlementsText)').Contains('applinks:%(_ShinyAppLinkDomain.Identity)'))"
+                 Text="App links: $(_ShinyAppleEntitlements) has no associated-domains entry for '%(_ShinyAppLinkDomain.Identity)'. Add &lt;string&gt;applinks:%(_ShinyAppLinkDomain.Identity)&lt;/string&gt; to the com.apple.developer.associated-domains array - the domain also needs an apple-app-site-association file at https://%(_ShinyAppLinkDomain.Identity)/.well-known/apple-app-site-association and the Associated Domains capability on the App ID." />
+
+    </Target>
+
+    <!--
+    Android validates the MERGED manifest rather than Platforms/Android/AndroidManifest.xml,
+    because [IntentFilter] attributes on MainActivity only appear after the manifest is generated.
+    Hooked on Build (a public target) rather than the private _GenerateJavaStubs so the hook still
+    resolves when this file is imported before the SDK targets.
+    -->
+    <Target Name="ShinyAppLinksValidateAndroid"
+            AfterTargets="Build"
+            Condition="'$(ShinyAppLinkValidation)' == 'true' AND '$(TargetPlatformIdentifier)' == 'android' AND ('$(ShinyAppLinkSchemes)' != '' OR '$(ShinyAppLinkDomains)' != '')">
+
+        <ItemGroup>
+            <_ShinyAppLinkScheme Include="$(ShinyAppLinkSchemes)" />
+            <_ShinyAppLinkDomain Include="$(ShinyAppLinkDomains)" />
+        </ItemGroup>
+
+        <PropertyGroup>
+            <_ShinyMergedManifest>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)','$(IntermediateOutputPath)','android','manifest','AndroidManifest.xml'))</_ShinyMergedManifest>
+            <_ShinyMergedManifestText Condition="$([System.IO.File]::Exists('$(_ShinyMergedManifest)'))">$([System.IO.File]::ReadAllText('$(_ShinyMergedManifest)'))</_ShinyMergedManifestText>
+        </PropertyGroup>
+
+        <Warning Code="SHINY101"
+                 Condition="'$(_ShinyMergedManifestText)' != '' AND !$([System.String]::Copy('$(_ShinyMergedManifestText)').Contains('%(_ShinyAppLinkScheme.Identity)'))"
+                 Text="App links: nothing in the Android manifest handles scheme '%(_ShinyAppLinkScheme.Identity)'. Add to MainActivity: [IntentFilter(new[] { Android.Content.Intent.ActionView }, Categories = new[] { Android.Content.Intent.CategoryDefault, Android.Content.Intent.CategoryBrowsable }, DataSchemes = new[] { &quot;%(_ShinyAppLinkScheme.Identity)&quot; })]" />
+
+        <Warning Code="SHINY102"
+                 Condition="'$(_ShinyMergedManifestText)' != '' AND !$([System.String]::Copy('$(_ShinyMergedManifestText)').Contains('%(_ShinyAppLinkDomain.Identity)'))"
+                 Text="App links: nothing in the Android manifest handles domain '%(_ShinyAppLinkDomain.Identity)'. Add to MainActivity: [IntentFilter(new[] { Android.Content.Intent.ActionView }, Categories = new[] { Android.Content.Intent.CategoryDefault, Android.Content.Intent.CategoryBrowsable }, DataScheme = &quot;https&quot;, DataHosts = new[] { &quot;%(_ShinyAppLinkDomain.Identity)&quot; }, AutoVerify = true)] - and host assetlinks.json at https://%(_ShinyAppLinkDomain.Identity)/.well-known/assetlinks.json" />
+    </Target>
 </Project>

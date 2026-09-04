@@ -17,6 +17,8 @@
         <ApplicationVersion>1</ApplicationVersion>
         <WindowsPackageType>None</WindowsPackageType>
         <ShinyMauiShell_GenerateAiExtensions>true</ShinyMauiShell_GenerateAiExtensions>
+        <ShinyAppLinkSchemes>shinyshell</ShinyAppLinkSchemes>
+        <ShinyAppLinkDomains>shinylib.net;www.shinylib.net</ShinyAppLinkDomains>
 
         <IsAotCompatible>true</IsAotCompatible>
 

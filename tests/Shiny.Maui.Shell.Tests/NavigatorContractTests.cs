@@ -49,12 +49,12 @@ public class NavigatorContractTests
     static string FindRepoRoot()
     {
         var dir = AppContext.BaseDirectory;
-        while (dir != null && !File.Exists(Path.Combine(dir, "Directory.build.props")))
+        while (dir != null && !File.Exists(Path.Combine(dir, "Directory.Build.props")))
             dir = Path.GetDirectoryName(dir);
 
         if (dir == null)
             throw new InvalidOperationException(
-                $"Could not locate repo root (no Directory.build.props found above '{AppContext.BaseDirectory}')."
+                $"Could not locate repo root (no Directory.Build.props found above '{AppContext.BaseDirectory}')."
             );
 
         return dir;

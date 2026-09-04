@@ -2,7 +2,13 @@ using Shiny;
 
 namespace Sample;
 
-[ShellMap<HomePage>(registerRoute: false)]
+[ShellMap<HomePage>(
+    registerRoute: false,
+    appLinks: ["home"],
+    Shortcut = "Home",
+    ShortcutSubtitle = "Back to the demo list",
+    ShortcutOrder = 0
+)]
 public partial class HomeViewModel(INavigator navigator) : ObservableObject
 {
     public ObservableCollection<DemoGroup> Demos { get; } =

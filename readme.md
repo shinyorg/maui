@@ -787,10 +787,218 @@ Disable individual generated files via MSBuild properties:
 | `ShinyMauiShell_AiToolsClassName` | `AiMauiShellTools` | Class name for the generated AI tools class |
 | `ShinyMauiShell_AiExtensionsClassName` | `AiExtensions` | Class name for the static route info extensions class |
 | `ShinyMauiShell_AiNavigateMethodName` | `NavigateToRoute` | Method name for the AI-friendly navigate method |
+| `ShinyAppLinkSchemes` | _(none)_ | Semicolon-separated custom URL schemes for [App Links](#app-links) |
+| `ShinyAppLinkDomains` | _(none)_ | Semicolon-separated universal/app link domains |
+| `ShinyAppLinkValidation` | `true` | Set to `false` to silence the manifest validation warnings |
 
 `NavigationBuilderExtensions.g.cs` (`AddGeneratedMaps()`) is only generated when `[ShellMap]` attributes are detected and `ShinyMauiShell_GenerateNavExtensions` is not set to `false`. A **SHINY002** warning is emitted if maps are detected but nav extensions are disabled.
 
 `DialogExtensions.g.cs` is only generated when at least one `[ShellMap]` ViewModel also implements `IDialogAware<T>`. Dialog methods are deliberately excluded from the AI tool surface — an AI agent should be driving navigation, not blocking on a modal awaiting human input.
+
+---
+
+## App Links
+
+Deep links are declared where the route already is — the `appLinks` argument of `[ShellMap]`:
+
+```csharp
+[ShellMap<ProductPage>(
+    description: "Shows a product",
+    appLinks: ["product/{id}", "p/{id}"]
+)]
+public partial class ProductViewModel : ObservableObject
+{
+    [ShellProperty("The product id")] public int     Id  { get; set; }
+    [ShellProperty(required: false)]  public string? Tab { get; set; }
+}
+```
+
+`myapp://product/123?tab=reviews` and `https://shinylib.net/p/123` both open `ProductPage` with
+`Id = 123` and `Tab = "reviews"`.
+
+- `{token}` path segments bind to the `[ShellProperty]` of the same name (case-insensitive).
+- Query string values bind by property name too. A path token wins over a query value of the same name.
+- Any configured scheme or domain serves any template — adding a domain later needs no attribute change.
+- Values are converted with `InvariantCulture`, so `1.5` parses the same on every device.
+- A missing or unparseable **required** value is a routing miss, not a crash: the next-best template
+  is tried, then `OnUnhandled`.
+
+### Setup
+
+```xml
+<PropertyGroup>
+  <ShinyAppLinkSchemes>myapp</ShinyAppLinkSchemes>
+  <ShinyAppLinkDomains>shinylib.net;www.shinylib.net</ShinyAppLinkDomains>
+</PropertyGroup>
+```
+
+```csharp
+.UseShinyShell(x => x.AddGeneratedMaps())
+```
+
+That is the whole setup. Declaring a template **is** the opt-in — `AddGeneratedMaps()` installs the
+platform delivery points itself (iOS `OpenUrl` and `ContinueUserActivity`, Android `OnCreate` and
+`OnNewIntent`), so your `AppDelegate`, `MainActivity` and `App` classes stay untouched. Windows has
+no automatic hook; forward activation to `IAppLinks.Handle(uri)`.
+
+Both the `AppDelegate` and `UISceneDelegate` variants are hooked, because `MauiUISceneDelegate`
+raises only the Scene-prefixed events and does not forward to the others — so an app that declares
+`UIApplicationSceneManifest` would otherwise get dead links. iOS calls one delegate or the other,
+never both.
+
+`UseAppLinks(...)` is optional and only changes defaults:
+
+### Push or reset is inferred, not configured
+
+| `registerRoute` | What the route is | An app link |
+|---|---|---|
+| `false` | `ShellContent` / tab / flyout item in AppShell XAML | resets the stack — `//route` |
+| `true` | `Routing.RegisterRoute`'d detail page | pushes onto the current stack |
+
+You already said which it is; the library does not ask twice. On a cold start a pushed route lands
+on Shell's default item, or on `AppLinkOptions.DefaultRoot` when you set one.
+
+```csharp
+.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseAppLinks(o =>
+    {
+        o.DefaultRoot = "//main/home";              // back stack for cold-start pushes
+        o.ResolveRoute = match => "//somewhere";    // last word on the destination
+        o.OnUnhandled = uri => Task.FromResult(false);
+    })
+)
+```
+
+### Manifests
+
+The build validates your manifests and emits a warning containing the exact markup to paste. It
+does not edit them — Android's merged manifest names the launcher activity with a CRC64 hash of its
+namespace that MSBuild cannot compute, and Apple universal links additionally need an
+`apple-app-site-association` file on the domain plus the Associated Domains capability on the App ID.
+
+| Code | Platform | Missing |
+|---|---|---|
+| **SHINY101** | Android | `[IntentFilter]` for a custom scheme |
+| **SHINY102** | Android | Verified (`AutoVerify`) `[IntentFilter]` for a domain |
+| **SHINY103** | iOS / MacCatalyst | `CFBundleURLTypes` in `Info.plist` |
+| **SHINY104** | iOS / MacCatalyst | `com.apple.developer.associated-domains` in `Entitlements.plist` |
+| **SHINY105** | Windows | `windows.protocol` extension in `Package.appxmanifest` |
+
+Set `<ShinyAppLinkValidation>false</ShinyAppLinkValidation>` to silence them. Creating
+`Platforms/iOS/Entitlements.plist` is enough on its own — the SDK picks it up without a
+`CodesignEntitlements` property.
+
+### Building links to share
+
+When exactly one scheme (or, failing that, one domain) is configured, an outbound builder is
+generated per route:
+
+```csharp
+var uri = navigator.CreateProductAppLink(id: 42, tab: "reviews");
+// myapp://product/42?Tab=reviews
+```
+
+### Diagnostics
+
+| Code | Severity | Meaning |
+|---|---|---|
+| **SHINY005** | Error | Template token has no matching `[ShellProperty]` |
+| **SHINY006** | Error | A templated property's type cannot be converted from a URL string |
+| **SHINY007** | Error | Two routes declare templates of the same shape |
+| **SHINY008** | Warning | `appLinks` declared but no scheme or domain configured |
+| **SHINY009** | Warning | A required property is not a token in the template, so links must supply it as a query value |
+
+---
+
+## App Shortcuts
+
+Home screen quick actions (iOS long-press, Android app shortcuts), declared on the route they open:
+
+```csharp
+[ShellMap<SearchPage>(
+    Shortcut         = "Search",
+    ShortcutSubtitle = "Find anything",
+    ShortcutIcon     = "search",
+    ShortcutOrder    = 0
+)]
+public partial class SearchViewModel : ObservableObject { }
+```
+
+```csharp
+.UseShinyShell(x => x.AddGeneratedMaps())
+```
+
+Setting `Shortcut` is what declares the quick action; the other three are optional refinements.
+The route becomes the shortcut's id, so there is no magic string to keep in sync and no
+hand-written `switch` over activations.
+
+Platform delivery is MAUI's `AppActions` — no `AppDelegate`, `MainActivity` or manifest work.
+Whether an activation pushes or resets the stack is inferred from `registerRoute`, exactly as it is
+for [App Links](#app-links).
+
+### Routes that need values
+
+An attribute cannot supply a runtime value, so a route with a **required** `[ShellProperty]` cannot
+declare a shortcut this way — that is a **SHINY010** error. Register those by hand instead:
+
+```csharp
+.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .AddAppShortcut<ProductViewModel>(
+        "Featured",
+        icon: "star",
+        id: "featured-product",
+        configure: vm => vm.Id = 42
+    )
+)
+```
+
+The lambda works even though shortcuts outlive the process: only the **id** is persisted by the
+platform, and the registration is rebuilt every launch and looked up by id on activation.
+
+`AddAppShortcut<TViewModel>` is also the way to use shortcuts with source generation turned off —
+`AddGeneratedMaps()` simply emits calls to it.
+
+### Localized titles
+
+The declared strings are attribute literals, so they cannot be translated on their own. Register an
+`IAppShortcutText` to resolve them at install time, when `CurrentUICulture` is known:
+
+```csharp
+public class ResourceShortcutText : IAppShortcutText
+{
+    public string  GetTitle(string route, string declared)     => AppResources.ResourceManager.GetString(declared) ?? declared;
+    public string? GetSubtitle(string route, string? declared) => declared is null ? null : AppResources.ResourceManager.GetString(declared) ?? declared;
+}
+```
+
+```csharp
+.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .UseShortcutText<ResourceShortcutText>()
+)
+```
+
+The declared string becomes the resource key, with the literal as its own fallback. It applies to
+generated and hand-registered shortcuts alike.
+
+Installed shortcuts keep their text until pushed again, so after a language change call:
+
+```csharp
+await appShortcuts.Refresh();   // IAppShortcuts
+```
+
+### Diagnostics
+
+| Code | Severity | Meaning |
+|---|---|---|
+| **SHINY010** | Error | `Shortcut` set on a route with a required `[ShellProperty]` — use `AddAppShortcut(configure:)` |
+| **SHINY011** | Warning | More than four shortcuts — iOS silently drops the excess |
+| **SHINY012** | Error | A `Shortcut*` property set without `Shortcut` (the title), so nothing is declared |
+
+`AddAppShortcut` logs the SHINY011 equivalent at runtime, since hand-registered shortcuts get no
+compile-time check.
 
 ---
 

@@ -9,6 +9,11 @@
         <!-- When App Sandbox is enabled, this value is required to open outgoing network connections. -->
         <key>com.apple.security.network.client</key>
         <true/>
+		<key>com.apple.developer.associated-domains</key>
+		<array>
+			<string>applinks:shinylib.net</string>
+			<string>applinks:www.shinylib.net</string>
+		</array>
     </dict>
 </plist>
 

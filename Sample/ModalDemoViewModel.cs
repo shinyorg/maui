@@ -3,7 +3,7 @@ using Shiny;
 
 namespace Sample;
 
-[ShellMap<ModalDemoPage>("modal")]
+[ShellMap<ModalDemoPage>("modal", appLinks: ["modal/{title}"])]
 public partial class ModalDemoViewModel(
     ILogger<ModalDemoViewModel> logger,
     INavigator navigator,

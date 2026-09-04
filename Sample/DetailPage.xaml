@@ -13,6 +13,7 @@
                    FontAttributes="Bold" FontSize="16" />
             <Label Text="{Binding Text, StringFormat='Text: {0}'}" />
             <Label Text="{Binding Source, StringFormat='Source: {0}'}" />
+            <Label Text="{Binding Highlight, StringFormat='Highlight: {0}'}" />
 
             <BoxView HeightRequest="1" Color="LightGray" Margin="0,8" />
 

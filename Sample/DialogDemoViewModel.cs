@@ -10,7 +10,11 @@ namespace Sample;
 /// Each command records what it expects alongside what happened, so a manual run reads as pass/fail
 /// instead of "hmm, that looked about right".
 /// </remarks>
-[ShellMap<DialogDemoPage>]
+[ShellMap<DialogDemoPage>(
+    Shortcut = "Dialog Bench",
+    ShortcutSubtitle = "Every provider, switchable",
+    ShortcutOrder = 1
+)]
 public partial class DialogDemoViewModel(
     IDialogs dialogs,
     INavigator navigator,

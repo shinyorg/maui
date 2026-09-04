@@ -21,6 +21,9 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\Shiny.Maui.Shell.SourceGenerators\Shiny.Maui.Shell.SourceGenerators.csproj" />
+        <!-- App link matching is pure logic over Uri, so it is tested for real behaviour rather
+             than by reading source text like NavigatorContractTests has to. -->
+        <ProjectReference Include="..\..\src\Shiny.Maui.Shell\Shiny.Maui.Shell.csproj" />
     </ItemGroup>
 
     <ItemGroup>
