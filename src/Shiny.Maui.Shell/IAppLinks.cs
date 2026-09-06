@@ -16,16 +16,32 @@ public interface IAppLinks
     /// </summary>
     /// <param name="uri">The inbound URI.</param>
     /// <returns>
-    /// True if a template matched and navigation was issued (or the link was queued for a Shell
-    /// that has not started yet). False if nothing matched and no fallback handled it.
+    /// What became of the link - see <see cref="AppLinkResult"/>. Anything other than
+    /// <see cref="AppLinkResult.Unhandled"/> means the app dealt with it.
     /// </returns>
-    Task<bool> Handle(Uri uri);
+    Task<AppLinkResult> Handle(Uri uri);
 
     /// <summary>
     /// Resolves the URI to a route without navigating. Useful for testing and for callers that
     /// want to inspect a link before acting on it.
     /// </summary>
     bool TryResolve(Uri uri, out AppLinkMatch match);
+}
+
+
+/// <summary>
+/// What happened to an inbound link.
+/// </summary>
+public enum AppLinkResult
+{
+    /// <summary>A template matched and the app navigated (or queued the link for a Shell that has not started yet).</summary>
+    Navigated,
+
+    /// <summary>A template matched, but an <see cref="INavigationInterceptor"/> cancelled the navigation. The app decided; the link was not ignored.</summary>
+    Blocked,
+
+    /// <summary>Nothing matched, or the match failed to bind, and no fallback handled it.</summary>
+    Unhandled
 }
 
 

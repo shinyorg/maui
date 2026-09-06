@@ -34,13 +34,23 @@ public interface INavigator
 
     // Navigate to a registered route with key-value arguments
     // relativeNavigation: true (default) for relative push, false for absolute "//" navigation
-    Task NavigateTo(string route, bool relativeNavigation = true, params IEnumerable<(string Key, object Value)> args);
+    // bypassInterceptors: skip the registered INavigationInterceptors
+    // Returns false when an interceptor cancelled the navigation (a redirect returns true)
+    Task<bool> NavigateTo(
+        string route,
+        bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    );
 
     // Navigate to the page associated with a ViewModel type
     // relativeNavigation: true (default) for relative push, false for absolute "//" navigation
-    Task NavigateTo<TViewModel>(
+    Task<bool> NavigateTo<TViewModel>(
         Action<TViewModel>? configure = null,
         bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
         params IEnumerable<(string Key, object Value)> args
     );
 
@@ -53,13 +63,15 @@ public interface INavigator
     ) where TViewModel : class, IDialogAware<T>;
 
     // Pop to the root page, optionally passing arguments
-    Task PopToRoot(params IEnumerable<(string Key, object Value)> args);
+    Task<bool> PopToRoot(params IEnumerable<(string Key, object Value)> args);
+    Task<bool> PopToRoot(bool bypassInterceptors, CancellationToken cancellationToken = default, params IEnumerable<(string Key, object Value)> args);
 
     // Go back one page, optionally passing arguments
-    Task GoBack(params IEnumerable<(string Key, object Value)> args);
+    Task<bool> GoBack(params IEnumerable<(string Key, object Value)> args);
 
     // Go back multiple pages
-    Task GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args);
+    Task<bool> GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args);
+    Task<bool> GoBack(int backCount, bool bypassInterceptors, CancellationToken cancellationToken = default, params IEnumerable<(string Key, object Value)> args);
 
     // Switch to a different Shell instance (replaces Application.MainPage)
     Task SwitchShell(Shell shell);
@@ -100,8 +112,12 @@ public interface INavigationBuilder
     // Add a segment using a raw route string
     INavigationBuilder Add(string routeName);
 
-    // Execute the navigation
-    Task Navigate();
+    // Skip the registered INavigationInterceptors for this navigation - the fluent form of
+    // Navigate(bypassInterceptors: true). Can be called anywhere in the chain.
+    INavigationBuilder BypassInterceptors();
+
+    // Execute the navigation. False when an interceptor cancelled it.
+    Task<bool> Navigate(bool bypassInterceptors = false, CancellationToken cancellationToken = default);
 }
 ```
 
@@ -455,9 +471,123 @@ public interface IPageLifecycleAware
 }
 ```
 
+## INavigationInterceptor Interface
+
+App-wide navigation guard. Registered with `AddNavigationInterceptor<T>()`; multiple interceptors
+run in registration order and the first to cancel or redirect wins.
+
+```csharp
+public interface INavigationInterceptor
+{
+    // uri:       the destination Shell URI, exactly as Shell will receive it
+    // viewModel: the DESTINATION ViewModel, already resolved and populated. null for unmapped
+    //            routes and for Shell-driven navigation (tab taps, hardware back).
+    // cancellationToken: the token passed to the navigation call
+    Task<NavigationInterceptorResult> InterceptNavigationAsync(
+        string uri,
+        object? viewModel,
+        CancellationToken cancellationToken
+    );
+
+    // Lowest runs first; ties keep registration order. Defaults to 0 - override to force a guard
+    // ahead of (or behind) another.
+    int Order => 0;
+}
+
+public class NavigationInterceptorResult
+{
+    bool CancelNavigation { get; set; }     // stop the navigation; wins over RedirectUri
+    string? RedirectUri { get; set; }       // go somewhere else instead
+    Type? RedirectViewModelType { get; set; } // refactor-safe alternative to RedirectUri
+    bool RedirectRelative { get; set; }     // typed redirect: push (true) or reset stack (false)
+
+    static NavigationInterceptorResult Continue { get; }
+    static NavigationInterceptorResult Cancel();
+    static NavigationInterceptorResult Redirect(string uri);
+    static NavigationInterceptorResult Redirect<TViewModel>(bool relativeNavigation = false);
+}
+```
+
+### Usage
+```csharp
+public class AuthNavigationInterceptor(IAuthService auth) : INavigationInterceptor
+{
+    public Task<NavigationInterceptorResult> InterceptNavigationAsync(string uri, object? viewModel)
+        => Task.FromResult(auth.IsAuthorized || uri.Contains("Login")
+            ? NavigationInterceptorResult.Continue
+            : NavigationInterceptorResult.Redirect<LoginViewModel>()
+        );
+}
+
+// MauiProgram.cs
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .AddNavigationInterceptor<AuthNavigationInterceptor>()
+);
+```
+
+### Coverage
+
+| Path | Intercepted | `viewModel` |
+|:-----|:------------|:------------|
+| `NavigateTo(route)` | yes | resolved from the route mapping |
+| `NavigateTo<TViewModel>(configure)` | yes | your instance, after `configure` |
+| `CreateBuilder()...Navigate()` | yes | the last segment's ViewModel |
+| `GoBack` / `PopToRoot` | yes | the existing ViewModel from the stack |
+| App links / app shortcuts | yes | the ViewModel with link values applied |
+| Tab taps, flyout, hardware back | yes | `null` |
+| `ShowDialog`, `SwitchShell` | no | — |
+
+### Constraints
+- Registered as singletons — hold no per-navigation state in fields.
+- `bypassInterceptors: true` on any `INavigator` method (or `INavigationBuilder.Navigate`, or the
+  fluent `CreateBuilder().BypassInterceptors()`) skips the chain — use it for the navigation a guard
+  itself performs.
+- Navigation methods return `Task<bool>`: false means an interceptor cancelled. A redirect returns
+  true — the navigation happened, somewhere else.
+- A redirect re-runs the entire chain against the new URI; redirecting to the URI already being
+  navigated to is ignored; a genuine loop throws after 10 redirects.
+- A single leading `/` in `RedirectUri` is promoted to `//` (stack reset). `..` prefixes go back.
+- Exceptions propagate to the caller and cancel the navigation.
+- Runs on the main thread — dialogs can be awaited directly.
+
+## INavigationContextAccessor Interface
+
+The rest of the navigation being intercepted, most usefully the page being left.
+
+```csharp
+public interface INavigationContextAccessor
+{
+    NavigationContext? Current { get; }  // null outside an interceptor call
+}
+
+public record NavigationContext(
+    string? FromUri,
+    object? FromViewModel,
+    string ToUri,
+    NavigationType NavigationType,
+    IReadOnlyDictionary<string, object> Parameters,
+    int RedirectCount
+)
+{
+    // Forward (push) / Back (GoBack, PopToRoot) / Root (SetRoot, SwitchShell)
+    NavigationDirection Direction { get; }
+}
+```
+
+`NavigationDirection` is also on `NavigationEventArgs` and `NavigatedEventArgs`, and any
+`NavigationType` converts with `navigationType.GetDirection()`.
+
+```csharp
+public enum NavigationDirection { Forward, Back, Root }
+```
+
 ## INavigationConfirmation Interface
 
-Allows a ViewModel to block navigation away from its page.
+Allows a ViewModel to block navigation away from its page. Asked **only for user-driven Shell
+navigation** — a tab tap, a flyout item, the hardware back button — and asked before the
+`INavigationInterceptor` chain. Programmatic navigation (`INavigator` calls, app links, shortcuts)
+does not consult it; guard those with an interceptor.
 
 ```csharp
 public interface INavigationConfirmation
@@ -508,7 +638,8 @@ public interface IAppLinks
 {
     // Resolves the URI to a route and navigates. True when matched (or queued for a
     // Shell that has not started yet).
-    Task<bool> Handle(Uri uri);
+    // Navigated / Blocked (an interceptor cancelled it) / Unhandled (nothing matched)
+    Task<AppLinkResult> Handle(Uri uri);
 
     // Resolves without navigating - for testing, or for inspecting a link before acting.
     bool TryResolve(Uri uri, out AppLinkMatch match);
@@ -669,6 +800,12 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
         Func<TViewModel, IReadOnlyDictionary<string, string>, bool> apply
     ) where TViewModel : class;
 
+    // Register a navigation guard (singleton). Runs on every navigation - see
+    // INavigationInterceptor. Overloads take an instance or an inline delegate.
+    ShinyAppBuilder AddNavigationInterceptor<TInterceptor>() where TInterceptor : class, INavigationInterceptor;
+    ShinyAppBuilder AddNavigationInterceptor(INavigationInterceptor interceptor);
+    ShinyAppBuilder AddNavigationInterceptor(Func<string, object?, Task<NavigationInterceptorResult>> interceptor);
+
     // Route registration lookup - page/ViewModel types plus whether the route was registered
     // with Shell (false means it is declared in AppShell XAML).
     (bool RegisterRoute, Type PageType, Type ViewModelType)? GetRouteInfo(string route);
@@ -760,7 +897,7 @@ public static class Routes
 ```csharp
 public static class NavigationExtensions
 {
-    public static Task NavigateToDetail(this INavigator navigator, string itemId, int page = default)
+    public static Task<bool> NavigateToDetail(this INavigator navigator, string itemId, int page = default, bool relativeNavigation = true, bool bypassInterceptors = false, CancellationToken cancellationToken = default)
     {
         return navigator.NavigateTo<DetailViewModel>(x =>
         {

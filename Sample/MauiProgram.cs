@@ -26,6 +26,10 @@ public static class MauiProgram
                 .UseDialogPresenter<SwitchableDialogPresenter>()
                 .AddGeneratedMaps()
                 .AddAiTools()
+                // Guards run in registration order on every navigation - route, typed, builder,
+                // back, app links, shortcuts, and tab taps.
+                .AddNavigationInterceptor<LoggingNavigationInterceptor>()
+                .AddNavigationInterceptor<DetailGuardNavigationInterceptor>()
             )
             .ConfigureFonts(fonts =>
             {
@@ -48,6 +52,7 @@ public static class MauiProgram
         // ChatView is provider-driven and the provider holds the conversation, so it outlives the page
         builder.Services.AddSingleton<AiChatSessionProvider>();
         builder.Services.AddSingleton<IMauiInitializeService, NavigationLogger>();
+        builder.Services.AddSingleton<NavigationGuardSwitch>();
 
 #if DEBUG
         builder.Logging.SetMinimumLevel(LogLevel.Trace);

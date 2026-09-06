@@ -99,17 +99,19 @@ public class NavigatorContractTests
     }
 
     [Fact]
-    public void ShellNavigator_ReadsCurrentPageBindingContextAfterGoToAsync()
+    public void ShellNavigator_PinsTheConfiguredViewModelInsteadOfProbingTheCurrentPage()
     {
         var source = ReadInfrastructureSource("ShellNavigator.cs");
 
-        source.ShouldContain("Shell.Current.CurrentPage",
+        source.ShouldContain("Pins = [new PinnedViewModel(typeof(TViewModel), vm!)]",
             customMessage:
-            "NavigateTo<TViewModel> must read Shell.Current.CurrentPage directly after Shell.GoToAsync " +
-            "returns. This is the replacement for the broken static-event flow and is the only path that " +
-            "works uniformly for both registered routes and ShellContent-declared routes."
+            "NavigateTo<TViewModel> must resolve and configure the viewmodel up front and pin it for the " +
+            "apply sites. Reading Shell.Current.CurrentPage.BindingContext after GoToAsync returns - the " +
+            "first replacement for the broken static-event flow - races Shell's own scheduling on Android, " +
+            "where the awaiter can resolve before OnNavigated / PageAppearing have fired."
         );
     }
+
 
     [Fact]
     public void NavigationBuilder_DoesNotSubscribeToPageResolved()
@@ -129,30 +131,119 @@ public class NavigatorContractTests
     }
 
     [Fact]
-    public void NavigationBuilder_PinsResolvedViewModelsToConfigurator()
+    public void NavigationBuilder_PinsResolvedViewModels()
     {
         var source = ReadInfrastructureSource("NavigationBuilder.cs");
 
-        source.ShouldContain("configurator.EnqueueResolved",
+        source.ShouldContain("PinnedViewModel",
             customMessage:
             "NavigationBuilder.Navigate must pre-resolve each typed segment's viewmodel, apply its configure " +
-            "callback synchronously, and pin the instance on ShellNavigationConfigurator via EnqueueResolved. " +
-            "The apply sites (ShinyRouteFactory.GetOrCreate, ShinyShell.OnNavigated, AppOnPageAppearing) consume " +
-            "the pinned instances when Shell realises each segment's page. This replaces the v6.1 stack-walk " +
-            "approach which raced against Shell's PageAppearing scheduling on Android."
+            "callback synchronously, and hand the instances to the navigator as pins - which pins them on " +
+            "ShellNavigationConfigurator via EnqueueResolved. The apply sites (ShinyRouteFactory.GetOrCreate, " +
+            "ShinyShell.OnNavigated, AppOnPageAppearing) consume the pinned instances when Shell realises each " +
+            "segment's page. This replaces the v6.1 stack-walk approach which raced against Shell's " +
+            "PageAppearing scheduling on Android."
+        );
+        source.ShouldContain("GetRequiredService(seg.ViewModelType)",
+            customMessage: "Each typed segment's viewmodel must still be resolved and configured before navigation starts."
+        );
+
+        // Both ways of asking to skip the guards have to reach the request, or the fluent form
+        // would silently do nothing.
+        source.ShouldContain("bypassInterceptors || this.skipInterceptors",
+            customMessage: "NavigationBuilder must honour both BypassInterceptors() and Navigate(bypassInterceptors: true)."
+        );
+
+        // The pinning itself moved into the navigator when interception was added, so every
+        // navigation path shares one place that pins, cancels and redirects.
+        var navigator = ReadInfrastructureSource("ShellNavigator.cs");
+        navigator.ShouldContain("configurator.EnqueueResolved",
+            customMessage: "ShinyShellNavigator.ExecuteNavigation must pin every pre-resolved viewmodel before Shell builds a page."
+        );
+    }
+
+
+    [Fact]
+    public void Navigator_RollsBackPinnedEntriesOnlyOnFailure()
+    {
+        var source = ReadInfrastructureSource("ShellNavigator.cs");
+
+        var execute = source.Substring(source.IndexOf("async Task ExecuteNavigation(", StringComparison.Ordinal));
+        execute = execute.Substring(0, execute.IndexOf("\n    }\n", StringComparison.Ordinal));
+
+        execute.ShouldNotContain("finally",
+            customMessage:
+            "ExecuteNavigation must not unconditionally dispose pinned subscriptions in a finally block - " +
+            "on Android the apply sites fire after the navigation task completes, so disposing on success " +
+            "would cause fallback DI resolves and lose configured viewmodels. Dispose only inside a catch block."
+        );
+        execute.ShouldContain("catch",
+            customMessage: "A failed navigation must roll its pins back, or they leak onto the next navigation to the same viewmodel type."
+        );
+    }
+
+
+    [Fact]
+    public void ShellNavigating_AsksNavigationConfirmationBeforeTheInterceptors()
+    {
+        var source = ReadInfrastructureSource("ShellNavigator.cs");
+
+        var handler = source.Substring(source.IndexOf("async void OnShellNavigating(", StringComparison.Ordinal));
+
+        var confirm = handler.IndexOf("confirm.CanNavigate()", StringComparison.Ordinal);
+        var intercept = handler.IndexOf(".Run(", StringComparison.Ordinal);
+
+        confirm.ShouldBeGreaterThan(-1,
+            customMessage:
+            "OnShellNavigating must still ask INavigationConfirmation.CanNavigate on the page being left. " +
+            "It is the ViewModel-level guard and predates interceptors - an app-wide pipeline must not " +
+            "quietly replace it."
+        );
+        confirm.ShouldBeLessThan(intercept,
+            customMessage:
+            "CanNavigate must be asked before the interceptors run: it answers 'may I leave this page', " +
+            "which is settled before anything about the destination matters."
         );
     }
 
     [Fact]
-    public void NavigationBuilder_RollsBackPinnedEntriesOnlyOnFailure()
+    public void NavigationConfirmation_StaysScopedToUserDrivenNavigation()
     {
-        var source = ReadInfrastructureSource("NavigationBuilder.cs");
+        var source = ReadInfrastructureSource("ShellNavigator.cs");
 
-        source.ShouldNotContain("finally",
+        // Shell raises Navigating for programmatic navigation too; the flag is what keeps
+        // CanNavigate limited to tab taps, flyout items and the hardware back button. Removing it
+        // would silently start prompting on every NavigateTo the app makes.
+        source.ShouldContain("if (this.isProgrammaticNavigation)",
+            customMessage: "The programmatic-navigation short-circuit in OnShellNavigating is what scopes INavigationConfirmation to user-driven navigation."
+        );
+
+        var core = source.Substring(source.IndexOf("async Task<bool> RunNavigationCore(", StringComparison.Ordinal));
+        core = core.Substring(0, core.IndexOf("\n    }\n", StringComparison.Ordinal));
+        core.ShouldNotContain("INavigationConfirmation",
             customMessage:
-            "NavigationBuilder must not unconditionally dispose pinned subscriptions in a finally block — " +
-            "on Android the apply sites fire after Navigate returns, so disposing on success would cause " +
-            "fallback DI resolves and lose configured viewmodels. Dispose only inside a catch block."
+            "Programmatic navigation deliberately does not ask INavigationConfirmation - that is the " +
+            "documented v6 behaviour. App-wide rules belong in an INavigationInterceptor."
+        );
+    }
+
+    [Fact]
+    public void Navigator_RunsInterceptorsOnEveryNavigationPath()
+    {
+        var source = ReadInfrastructureSource("ShellNavigator.cs");
+
+        // Every navigation entry point must build a NavigationRequest and go through
+        // RunNavigation/RunNavigationCore - a path that calls Shell.GoToAsync on its own would
+        // silently skip the guards, which is the failure mode this whole feature exists to avoid.
+        source.ShouldContain("interceptors\n            .Run(",
+            customMessage: "RunNavigationCore must run the interceptor pipeline before navigating."
+        );
+
+        var gotoCalls = System.Text.RegularExpressions.Regex.Matches(source, @"GoToAsync\(").Count;
+        gotoCalls.ShouldBe(1,
+            customMessage:
+            "Shell.GoToAsync must be called from exactly one place (ExecuteNavigation). Any other call site " +
+            "bypasses INavigationInterceptor."
         );
     }
 }

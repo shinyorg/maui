@@ -26,6 +26,18 @@ Inspired by [Prism Library](https://prismlibrary.com) by Dan Siegel and Brian La
 | Tab badges | Numeric tab badges via route or ViewModel — `SetTabBadge<InboxViewModel>(3)` |
 | XAML navigation | Attached properties on `Button`, `MenuItem`, and `ToolbarItem` |
 
+### 🛡️ Navigation Interceptors — `INavigationInterceptor`
+
+| Capability | Description |
+|:-----------|:------------|
+| Guard every navigation | Routes, ViewModels, builder, back, app links, shortcuts, tab taps |
+| Cancel | `NavigationInterceptorResult.Cancel()` — the user stays put |
+| Redirect | `Redirect("//Login")` or refactor-safe `Redirect<LoginViewModel>()` |
+| Destination ViewModel | Resolved and populated *before* the interceptor runs, so guards can read it |
+| Chained | Multiple interceptors run in `Order` then registration order; a redirect re-runs the chain |
+| Bypassable | `NavigateTo(..., bypassInterceptors: true)` for the navigation a guard itself performs |
+| Answerable | Every navigation method returns `Task<bool>` - false when a guard cancelled it |
+
 ### 💬 Dialogs — `IDialogs`
 
 | Method | Returns |
@@ -62,7 +74,7 @@ For anything richer than the four primitives above, present one of your own page
 | Interface | Method | Purpose |
 |:----------|:-------|:--------|
 | `IPageLifecycleAware` | `OnAppearing()` / `OnDisappearing()` | Page visibility hooks |
-| `INavigationConfirmation` | `Task<bool> CanNavigate()` | Guard navigation (unsaved changes, etc.) |
+| `INavigationConfirmation` | `Task<bool> CanNavigate()` | Guard leaving the page - user-driven navigation only (tab tap, flyout, hardware back) |
 | `INavigationAware` | `OnNavigatingFrom(params)` | Mutate parameters before leaving |
 | `IQueryAttributable` | `ApplyQueryAttributes(params)` | Receive navigation parameters (only for string-based `NavigateTo` — not needed with `[ShellProperty]`) |
 | `IDisposable` | `Dispose()` | Cleanup when page leaves the stack |
@@ -550,6 +562,179 @@ builder.Services.AddSingleton<IMauiInitializeService, NavigationLogger>();
 
 ---
 
+## Navigation Interceptors
+
+`INavigationInterceptor` sits in front of every navigation the app makes and can let it through,
+cancel it, or send it somewhere else. Register as many as you like - they run in registration order
+and the first one to cancel or redirect wins.
+
+```csharp
+public interface INavigationInterceptor
+{
+    Task<NavigationInterceptorResult> InterceptNavigationAsync(
+        string uri,
+        object? viewModel,
+        CancellationToken cancellationToken
+    );
+
+    // Lowest runs first; ties keep registration order
+    int Order => 0;
+}
+```
+
+Every navigation method returns `Task<bool>` - false means a guard cancelled it:
+
+```csharp
+if (!await navigator.NavigateTo<DetailViewModel>())
+    // an interceptor said no
+```
+
+```csharp
+public class AuthNavigationInterceptor(IAuthService auth) : INavigationInterceptor
+{
+    // Guards run before anything that only observes
+    public int Order => -100;
+
+    public async Task<NavigationInterceptorResult> InterceptNavigationAsync(
+        string uri,
+        object? viewModel,
+        CancellationToken cancellationToken
+    )
+    {
+        if (await auth.IsAuthorized(cancellationToken) || uri.Contains("Login"))
+            return NavigationInterceptorResult.Continue;
+
+        return NavigationInterceptorResult.Redirect<LoginViewModel>();   // or Redirect("//Login")
+    }
+}
+```
+
+```csharp
+// MauiProgram.cs
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .AddNavigationInterceptor<AuthNavigationInterceptor>()
+    .AddNavigationInterceptor<AuditNavigationInterceptor>()
+
+    // or inline, for a one-line rule
+    .AddNavigationInterceptor((uri, vm, ct) =>
+    {
+        Console.WriteLine($"Navigating to {uri}");
+        return Task.FromResult(NavigationInterceptorResult.Continue);
+    }, order: 100)
+);
+```
+
+Interceptors run in `Order` (lowest first), then registration order. They are singletons, so keep
+no per-navigation state in fields.
+
+### What gets intercepted
+
+| Path | Intercepted | `viewModel` argument |
+|---|---|---|
+| `NavigateTo(route)` | ✅ | Resolved from the route's ViewModel mapping |
+| `NavigateTo<TViewModel>(configure)` | ✅ | Your instance, after `configure` ran |
+| `CreateBuilder()...Navigate()` | ✅ | The last segment's ViewModel (the page the user lands on) |
+| `GoBack` / `PopToRoot` | ✅ | The existing ViewModel from the navigation stack |
+| App links & app shortcuts | ✅ | The ViewModel with the link's values already applied |
+| Tab taps, flyout items, hardware back | ✅ | `null` - Shell builds these, so Shiny doesn't construct one |
+| `ShowDialog` / `SwitchShell` | ❌ | Not navigation |
+
+The ViewModel handed over is the **destination** one, resolved and fully populated *before* the
+interceptor runs - so a guard can decide on the destination's own state, not just its URI, and any
+change it makes sticks: that instance is what gets bound to the page. (Navigation arguments are
+applied by Shell afterwards, so they win over an interceptor's edits to the same property, and a
+route declared as a `ShellContent` in AppShell XAML keeps the ViewModel its page was already bound
+to - the interceptor sees a resolved instance, but changes to it do not reach an on-screen page.)
+
+The page being *left* comes from `INavigationContextAccessor`, along with the rest of the
+navigation:
+
+```csharp
+public class UnsavedChangesNavigationInterceptor(
+    INavigationContextAccessor context,
+    IDialogs dialogs
+) : INavigationInterceptor
+{
+    public async Task<NavigationInterceptorResult> InterceptNavigationAsync(string uri, object? viewModel)
+    {
+        if (context.Current?.FromViewModel is not IUnsavedChanges { HasUnsavedChanges: true })
+            return NavigationInterceptorResult.Continue;
+
+        return await dialogs.Confirm("Unsaved Changes", "Discard changes?")
+            ? NavigationInterceptorResult.Continue
+            : NavigationInterceptorResult.Cancel();
+    }
+}
+```
+
+`NavigationContext` carries `FromUri`, `FromViewModel`, `ToUri`, `NavigationType`, `Direction`,
+`Parameters` and `RedirectCount`. It is only set while an interceptor is running.
+
+`Direction` is the coarse question `NavigationType` answers precisely - `Forward` (push), `Back`
+(`GoBack`, `PopToRoot`) or `Root` (absolute route, Shell swap). It is on `NavigationEventArgs` and
+`NavigatedEventArgs` too, and any `NavigationType` converts with `.GetDirection()`.
+
+### The escape hatch
+
+A guard that navigates would otherwise guard itself. Every navigation method takes
+`bypassInterceptors`:
+
+```csharp
+await navigator.NavigateTo<LoginViewModel>(bypassInterceptors: true);
+await navigator.GoBack(1, bypassInterceptors: true);
+await navigator.PopToRoot(bypassInterceptors: true);
+await navigator.CreateBuilder().AddDetail(42).Navigate(bypassInterceptors: true);
+
+// the builder is fluent, so it reads fluently too
+await navigator.CreateBuilder().BypassInterceptors().AddDetail(42).Navigate();
+```
+
+A `RedirectUri` never needs it - the chain restarting on a redirect is deliberate, and a redirect
+to the destination already being navigated to is ignored rather than looping.
+
+Interceptors also receive the `CancellationToken` passed to the navigation call - for the network
+call an auth guard makes, not for the decision itself. Cancelling it abandons the navigation with
+an `OperationCanceledException`.
+
+### Cancel and redirect
+
+| Result | Behaviour |
+|---|---|
+| `NavigationInterceptorResult.Continue` | Next interceptor, then navigate |
+| `Cancel()` | Nothing navigates, the rest of the chain is skipped, the caller's `Task` completes normally |
+| `Redirect("Detail")` | Pushes |
+| `Redirect("//Main/Home")` | Resets the Shell stack |
+| `Redirect("/Login")` | Same as `//Login` - a single leading slash is promoted |
+| `Redirect<LoginViewModel>()` | Resets the stack to that ViewModel's route (refactor-safe) |
+| `Redirect<DetailViewModel>(relativeNavigation: true)` | Pushes that ViewModel's route |
+
+A redirect **restarts the whole chain** against the new URI, so the redirect target is guarded as
+thoroughly as the original destination - and the abandoned destination's ViewModel is dropped
+rather than bound to anything. Redirecting to the URI already being navigated to is ignored (an
+unconditional "go to login" guard says this every time the user navigates to login); a genuine
+redirect loop throws after 10 hops rather than hanging.
+
+An exception thrown from an interceptor propagates to the caller and the navigation does not
+happen - a guard that fails is never treated as a guard that passed. On tab taps and hardware back,
+where there is no caller, the exception is logged and the navigation is cancelled.
+
+A blocked app link reports `AppLinkResult.Blocked` from `IAppLinks.Handle` - distinct from
+`Unhandled` (nothing matched), because the platform hooks still report a blocked link as handled:
+saying otherwise invites iOS to open the URL in a browser instead, which is the opposite of what a
+guard that just blocked it wants.
+
+### Interceptors vs. the other hooks
+
+- **`INavigationInterceptor`** - app-wide, about the destination, can cancel *and* redirect.
+- **`INavigationConfirmation`** - implemented by the ViewModel being left, answers "may I leave?",
+  and only applies to user-driven Shell navigation (tab tap, flyout item, hardware back button):
+  `INavigator` calls, app links and shortcuts do not consult it. Asked before the interceptors, and
+  unaffected by `bypassInterceptors`, which is about the interceptor chain only.
+- **`Navigating` / `Navigated` events** - observation only, they cannot change the outcome.
+
+---
+
 ## ViewModel Lifecycle
 
 Implement these interfaces on your ViewModels as needed. Works just like [Prism Library](https://prismlibrary.com).
@@ -568,6 +753,9 @@ public partial class DetailViewModel(INavigator navigator, IDialogs dialogs) : O
     public void OnAppearing() { /* load data */ }
     public void OnDisappearing() { /* pause */ }
 
+    // Asked when the user navigates away themselves - a tab tap, a flyout item, the hardware
+    // back button. Programmatic navigation does not consult it; guard that with an
+    // INavigationInterceptor (see Navigation Interceptors above).
     public async Task<bool> CanNavigate()
     {
         if (!hasUnsavedChanges) return true;
@@ -839,7 +1027,9 @@ public partial class ProductViewModel : ObservableObject
 That is the whole setup. Declaring a template **is** the opt-in — `AddGeneratedMaps()` installs the
 platform delivery points itself (iOS `OpenUrl` and `ContinueUserActivity`, Android `OnCreate` and
 `OnNewIntent`), so your `AppDelegate`, `MainActivity` and `App` classes stay untouched. Windows has
-no automatic hook; forward activation to `IAppLinks.Handle(uri)`.
+no automatic hook; forward activation to `IAppLinks.Handle(uri)`, which returns an
+`AppLinkResult` — `Navigated`, `Blocked` (a [navigation interceptor](#navigation-interceptors)
+cancelled it) or `Unhandled` (nothing matched). Treat anything other than `Unhandled` as handled.
 
 Both the `AppDelegate` and `UISceneDelegate` variants are hooked, because `MauiUISceneDelegate`
 raises only the Scene-prefixed events and does not forward to the others — so an app that declares

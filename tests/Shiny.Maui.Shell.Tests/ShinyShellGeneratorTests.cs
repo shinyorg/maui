@@ -726,6 +726,34 @@ namespace TestApp
         navSource.ShouldContain("[global::System.ComponentModel.Description(\"If true, it will navigate/stack from where the application currently is otherwise, it will reset the stack to this new route\")] bool relativeNavigation = true");
     }
 
+    [Fact]
+    public void NavExtensions_CarryTheInterceptorControlsAndReturnWhetherNavigationHappened()
+    {
+        var source = StubTypes + @"
+namespace TestApp
+{
+    public class DetailPage : Microsoft.Maui.Controls.Page { }
+
+    [ShellMap<DetailPage>]
+    public class DetailViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        [ShellProperty]
+        public string Text { get; set; }
+    }
+}";
+        var result = RunGenerator(source);
+        var navSource = GetGeneratedSource(result, "NavigationExtensions.g.cs");
+
+        // A generated call must never be the weaker option next to INavigator itself - it returns
+        // the same "did this happen" answer and takes the same interceptor controls.
+        navSource.ShouldContain("global::System.Threading.Tasks.Task<bool> NavigateToDetail");
+        navSource.ShouldContain("bool bypassInterceptors = false");
+        navSource.ShouldContain("global::System.Threading.CancellationToken cancellationToken = default");
+        navSource.ShouldContain("relativeNavigation, bypassInterceptors, cancellationToken);");
+    }
+
     #endregion
 
     #region GeneratedRouteInfo Extension
@@ -1118,6 +1146,10 @@ namespace TestApp
         routeInfoSource.ShouldContain("GetAiToolApplicableGeneratedRoutes");
         routeInfoSource.ShouldContain("NavigateToRoute(");
         routeInfoSource.ShouldContain("AddAiTools");
+
+        // An interceptor can turn the agent away exactly as it turns a button tap away, and the
+        // tool has to say so - a success message that was not true is worse than no tool at all.
+        routeInfoSource.ShouldContain("was blocked by the application");
     }
 
     [Fact]

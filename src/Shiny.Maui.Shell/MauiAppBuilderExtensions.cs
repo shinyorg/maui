@@ -29,6 +29,11 @@ public static class MauiAppBuilderExtensions
                 builder.Services.TryAddSingleton<IDialogPresenter, ShellModalDialogPresenter>();
                 builder.Services.AddSingleton<ShellTabBadgeManager>();
                 builder.Services.AddSingleton<ShellNavigationConfigurator>();
+                builder.Services.AddSingleton<NavigationContextAccessor>();
+                builder.Services.AddSingleton<INavigationContextAccessor>(
+                    sp => sp.GetRequiredService<NavigationContextAccessor>()
+                );
+                builder.Services.AddSingleton<NavigationInterceptorPipeline>();
 
                 builder.Services.AddSingleton<ShellServices>();
                 builder.Services.AddSingleton<ShinyShellNavigator>();

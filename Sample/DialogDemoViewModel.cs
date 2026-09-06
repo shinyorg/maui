@@ -146,8 +146,10 @@ public partial class DialogDemoViewModel(
     Task ShowDialogOverModal() => navigator.NavigateTo(
         "modal",
         relativeNavigation: true,
-        ("Title", "Dialog over a modal"),
-        ("OptionalNote", "Show the dialog from here - it should land on top of this page")
+        args: [
+            ("Title", "Dialog over a modal"),
+            ("OptionalNote", "Show the dialog from here - it should land on top of this page")
+        ]
     );
 
 

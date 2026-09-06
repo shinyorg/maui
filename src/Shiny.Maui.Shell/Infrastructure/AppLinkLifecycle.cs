@@ -27,7 +27,9 @@ public static partial class AppLinkLifecycle
             return false;
 
         // Decide the return value synchronously - the platform needs an answer now, while the
-        // navigation itself is allowed to complete on its own schedule.
+        // navigation itself (and any interceptor that turns it away) is allowed to complete on its
+        // own schedule. A link a guard later blocks still counts as handled here: telling the
+        // platform otherwise invites it to open the URL in a browser instead.
         var handled = appLinks.TryResolve(uri, out _);
         _ = appLinks.Handle(uri);
         return handled;

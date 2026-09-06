@@ -48,7 +48,8 @@ public class AppShortcutRouter(
     /// Entry point for MAUI's OnAppAction callback. Never throws - a quick action that cannot be
     /// resolved should log and do nothing, not take the app down during activation.
     /// </summary>
-    public async Task Handle(string id)
+    /// <returns>False when the shortcut could not be resolved, or when an interceptor blocked it.</returns>
+    public async Task<bool> Handle(string id)
     {
         try
         {
@@ -56,14 +57,14 @@ public class AppShortcutRouter(
             if (shortcut == null)
             {
                 logger.LogWarning("[Shortcut] '{id}' is not registered", id);
-                return;
+                return false;
             }
 
             var vm = services.GetService(shortcut.ViewModelType);
             if (vm == null)
             {
                 logger.LogWarning("[Shortcut] '{vm}' is not registered in DI", shortcut.ViewModelType);
-                return;
+                return false;
             }
 
             // Declared shortcuts carry no values (SHINY010 guarantees the route needs none); a
@@ -76,13 +77,19 @@ public class AppShortcutRouter(
             var route = AppLinkRoutes.Build(shortcut.Route, shortcut.RegisterRoute, coldStart, options.DefaultRoot);
             logger.LogInformation("[Shortcut] '{id}' -> '{route}'", id, route);
 
-            await navigator
+            var navigated = await navigator
                 .NavigateToAppLink(shortcut.ViewModelType, vm, route)
                 .ConfigureAwait(false);
+
+            if (!navigated)
+                logger.LogInformation("[Shortcut] '{id}' was blocked by an interceptor", id);
+
+            return navigated;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "[Shortcut] Failed to handle '{id}'", id);
+            return false;
         }
     }
 }

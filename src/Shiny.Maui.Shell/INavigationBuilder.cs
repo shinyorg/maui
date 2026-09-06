@@ -33,7 +33,22 @@ public interface INavigationBuilder
     INavigationBuilder Add(string routeName);
 
     /// <summary>
+    /// Skips the registered <see cref="INavigationInterceptor"/>s for this navigation - the fluent
+    /// form of <c>Navigate(bypassInterceptors: true)</c>, for the navigation a guard itself
+    /// performs and which must not be guarded again.
+    /// </summary>
+    /// <remarks>
+    /// Call it anywhere in the chain; unlike <see cref="PopBack"/> it does not have to come first.
+    /// It skips the interceptors only - <see cref="INavigationConfirmation"/> is the ViewModel's
+    /// own guard on the page being left and is unaffected.
+    /// </remarks>
+    INavigationBuilder BypassInterceptors();
+
+    /// <summary>
     /// Builds the final URI from all accumulated segments and executes the navigation.
     /// </summary>
-    Task Navigate();
+    /// <param name="bypassInterceptors">Skips the registered <see cref="INavigationInterceptor"/>s. Ignored when <see cref="BypassInterceptors"/> already said so.</param>
+    /// <param name="cancellationToken">Passed to the interceptors.</param>
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it.</returns>
+    Task<bool> Navigate(bool bypassInterceptors = false, CancellationToken cancellationToken = default);
 }

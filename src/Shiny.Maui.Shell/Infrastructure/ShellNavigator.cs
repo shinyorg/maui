@@ -8,7 +8,8 @@ public class ShinyShellNavigator(
     IMainThread mainThread,
     ShinyAppBuilder navBuilder,
     ShellTabBadgeManager tabBadgeManager,
-    ShellNavigationConfigurator configurator
+    ShellNavigationConfigurator configurator,
+    NavigationInterceptorPipeline interceptors
 ) : INavigator, IMauiInitializeService, IDisposable
 {
     public event EventHandler<NavigationEventArgs>? Navigating;
@@ -100,49 +101,231 @@ public class ShinyShellNavigator(
 
 
     public INavigationBuilder CreateBuilder(bool fromRoot = false)
-        => new NavigationBuilder(this, navBuilder, configurator, mainThread, logger, fromRoot);
+        => new NavigationBuilder(this, navBuilder, fromRoot);
 
 
-    internal void PrepareForProgrammaticNavigation(string uri, NavigationType navType, Dictionary<string, object> parameters)
+    /// <summary>
+    /// One navigation, before the interceptors have had their say. Everything that navigates -
+    /// route, typed, builder, back, app link, shortcut - describes itself with one of these so a
+    /// guard written once applies to all of them.
+    /// </summary>
+    /// <param name="Uri">The requested destination, exactly as Shell would receive it.</param>
+    /// <param name="NavigationType">How the destination is reached.</param>
+    /// <param name="Parameters">Navigation arguments.</param>
+    internal sealed record NavigationRequest(
+        string Uri,
+        NavigationType NavigationType,
+        Dictionary<string, object> Parameters
+    )
     {
-        if (Shell.Current.CurrentPage?.BindingContext is INavigationAware navAware)
-            navAware.OnNavigatingFrom(parameters);
+        /// <summary>
+        /// ViewModels the caller has already resolved and populated, in the order Shell realises
+        /// their pages. They are pinned for the apply sites - and dropped if an interceptor
+        /// redirects, because their pages are then never built.
+        /// </summary>
+        public IReadOnlyList<PinnedViewModel> Pins { get; init; } = Array.Empty<PinnedViewModel>();
 
-        this.RaiseNavigating(Shell.Current, uri, navType, parameters);
-        this.isProgrammaticNavigation = true;
+        /// <summary>The destination ViewModel handed to interceptors. Null asks the pipeline to resolve one when <see cref="ResolveViewModel"/> allows it.</summary>
+        public object? ViewModel { get; init; }
+
+        /// <summary>Type of <see cref="ViewModel"/>.</summary>
+        public Type? ViewModelType { get; init; }
+
+        /// <summary>
+        /// Whether the pipeline may construct the destination ViewModel for the interceptors.
+        /// False for back navigation, where the destination already exists.
+        /// </summary>
+        public bool ResolveViewModel { get; init; }
+
+        /// <summary>Enables the Linux direct-push fallback (see <see cref="ExecuteNavigation"/>).</summary>
+        public bool AllowLinuxDirectPush { get; init; }
+
+        /// <summary>Skips the interceptor chain entirely - for the navigation a guard itself issues.</summary>
+        public bool BypassInterceptors { get; init; }
+
+        /// <summary>Handed to the interceptors.</summary>
+        public CancellationToken CancellationToken { get; init; }
+    }
+
+    internal readonly record struct PinnedViewModel(Type Type, object Instance);
+
+
+    internal Task<bool> RunNavigation(NavigationRequest request)
+        => mainThread.InvokeOnMainThreadAsync(() => this.RunNavigationCore(request));
+
+
+    /// <summary>
+    /// Interception, then navigation. Runs on the main thread so an interceptor can put a dialog
+    /// up without dispatching for itself.
+    /// </summary>
+    async Task<bool> RunNavigationCore(NavigationRequest request)
+    {
+        if (request.BypassInterceptors)
+        {
+            logger.LogDebug("[Navigation] '{uri}' is bypassing the interceptors", request.Uri);
+            await this
+                .ExecuteNavigation(request.Uri, request.NavigationType, request.Parameters, request.Pins, request.AllowLinuxDirectPush)
+                .ConfigureAwait(true);
+
+            return true;
+        }
+
+        var interception = await interceptors
+            .Run(
+                request.Uri,
+                request.NavigationType,
+                request.Parameters,
+                request.ViewModel,
+                request.ViewModelType,
+                request.ResolveViewModel,
+                request.CancellationToken
+            )
+            .ConfigureAwait(true);
+
+        if (interception.IsCancelled)
+        {
+            // Cancelling is a decision, not a failure - the caller's task completes normally with
+            // false, and any ViewModel resolved for the abandoned destination is never pinned.
+            logger.LogDebug("[Navigation] '{uri}' was cancelled by an interceptor", request.Uri);
+            return false;
+        }
+
+        var uri = interception.Uri;
+        var navType = request.NavigationType;
+        var pins = request.Pins;
+
+        if (interception.IsRedirected)
+        {
+            // The requested destination is gone, so its pins go with it - keeping them would leak
+            // a configured ViewModel onto whatever navigates to that type next.
+            navType = NavigationUri.GetNavigationType(uri);
+            pins = this.CanPinResolved(interception, uri)
+                ? [new PinnedViewModel(interception.ViewModelType!, interception.ViewModel!)]
+                : [];
+        }
+        else if (this.CanPinResolved(interception, uri))
+        {
+            // The pipeline built the destination ViewModel so the interceptors could see it - bind
+            // that instance rather than letting the route factory resolve a second one, or the
+            // mutations an interceptor made would be thrown away. It is appended because the
+            // pipeline only ever resolves the destination, which Shell realises last.
+            pins = [..pins, new PinnedViewModel(interception.ViewModelType!, interception.ViewModel!)];
+        }
+
+        await this.ExecuteNavigation(uri, navType, request.Parameters, pins, request.AllowLinuxDirectPush).ConfigureAwait(true);
+        return true;
     }
 
 
-    public Task NavigateTo(string route, bool relativeNavigation = true, params IEnumerable<(string Key, object Value)> args) =>
-        mainThread.InvokeOnMainThreadAsync(() =>
+    /// <summary>
+    /// Whether a ViewModel the pipeline built for the interceptors should also be bound to the
+    /// destination page.
+    /// </summary>
+    /// <remarks>
+    /// Only for routes registered with Shell, which are always built through
+    /// <see cref="ShinyRouteFactory"/> and therefore always consume their pin. A route declared as
+    /// a <c>ShellContent</c> in AppShell XAML may already be realised and bound, in which case the
+    /// apply sites leave it alone - and the pin would sit in the queue waiting to surprise a later
+    /// navigation to the same ViewModel type. Interceptors still see the instance either way; what
+    /// they do not get on an already-realised ShellContent page is the guarantee that a change they
+    /// make to it reaches the screen.
+    /// </remarks>
+    bool CanPinResolved(NavigationInterception interception, string uri)
+    {
+        if (!interception.IsViewModelResolved || interception.ViewModelType == null || interception.ViewModel == null)
+            return false;
+
+        var route = NavigationUri.GetTargetRoute(uri);
+        return route != null && navBuilder.GetRouteInfo(route)?.RegisterRoute == true;
+    }
+
+
+    /// <summary>
+    /// The navigation itself, with no interception. Must be called on the main thread.
+    /// </summary>
+    async Task ExecuteNavigation(
+        string uri,
+        NavigationType navType,
+        Dictionary<string, object> parameters,
+        IReadOnlyList<PinnedViewModel> pins,
+        bool allowLinuxDirectPush
+    )
+    {
+        var shell = Shell.Current;
+        if (shell.CurrentPage?.BindingContext is INavigationAware navAware)
+            navAware.OnNavigatingFrom(parameters);
+
+        this.RaiseNavigating(shell, uri, navType, parameters);
+        this.isProgrammaticNavigation = true;
+
+        // Pin every pre-resolved ViewModel before Shell builds a page. Whichever apply site fires
+        // (ShinyRouteFactory.GetOrCreate for registered routes, ShinyShell.OnNavigated for
+        // ShellContent routes, or AppOnPageAppearing as a fallback) consumes these instead of
+        // resolving fresh instances from DI.
+        var subscriptions = new List<IDisposable>(pins.Count);
+        foreach (var pin in pins)
+            subscriptions.Add(configurator.EnqueueResolved(pin.Type, pin.Instance));
+
+        try
         {
-            var shell = Shell.Current;
-            var parameters = args.ToDictionary(x => x.Key, x => x.Value);
-
-            if (shell.CurrentPage?.BindingContext is INavigationAware navAware)
-                navAware.OnNavigatingFrom(parameters);
-
-            var uri = relativeNavigation ? route : $"//{route}";
-            var navType = relativeNavigation ? NavigationType.Push : NavigationType.SetRoot;
-            this.RaiseNavigating(shell, uri, navType, parameters);
-            this.isProgrammaticNavigation = true;
-
-            if (OperatingSystem.IsLinux())
+            if (allowLinuxDirectPush && OperatingSystem.IsLinux())
             {
-                // Shell.GoToAsync is unreliable on Platform.Maui.Linux.Gtk4 — resolve
+                // Shell.GoToAsync is unreliable on Platform.Maui.Linux.Gtk4 - resolve
                 // the page from the registered route map and push directly.
-                var pageType = navBuilder.GetPageTypeForRoute(route);
+                var route = NavigationUri.GetTargetRoute(uri);
+                var pageType = route == null ? null : navBuilder.GetPageTypeForRoute(route);
                 if (pageType != null && services.GetService(pageType) is Page page)
-                    return shell.Navigation.PushAsync(page, true);
+                {
+                    await shell.Navigation.PushAsync(page, true).ConfigureAwait(true);
+                    return;
+                }
             }
 
-            return shell.GoToAsync(uri, true, parameters);
+            await shell.GoToAsync(uri, true, parameters).ConfigureAwait(true);
+        }
+        catch
+        {
+            // Only roll back the pinned entries when navigation actually failed. On success we
+            // leave them pinned because the apply sites have not fired yet (typically the next
+            // dispatcher tick on Android) and disposing would fall back to a fresh DI resolve.
+            foreach (var subscription in subscriptions)
+                subscription.Dispose();
+
+            // The Navigating event never arrived to consume the flag, and leaving it set would
+            // wave the next user-driven navigation straight past every guard.
+            this.isProgrammaticNavigation = false;
+            throw;
+        }
+    }
+
+
+    public Task<bool> NavigateTo(
+        string route,
+        bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    )
+        => this.RunNavigation(new NavigationRequest(
+            relativeNavigation ? route : $"//{route}",
+            relativeNavigation ? NavigationType.Push : NavigationType.SetRoot,
+            args.ToDictionary(x => x.Key, x => x.Value)
+        )
+        {
+            // Nothing is resolved yet, so the pipeline builds the destination ViewModel when an
+            // interceptor is actually there to look at it.
+            ResolveViewModel = true,
+            AllowLinuxDirectPush = true,
+            BypassInterceptors = bypassInterceptors,
+            CancellationToken = cancellationToken
         });
 
 
-    public async Task NavigateTo<TViewModel>(
+    public Task<bool> NavigateTo<TViewModel>(
         Action<TViewModel>? configure = null,
         bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
         params IEnumerable<(string Key, object Value)> args
     )
     {
@@ -153,92 +336,59 @@ public class ShinyShellNavigator(
         if (!relativeNavigation)
             route = $"//{route}";
 
-        var parameters = args.ToDictionary(x => x.Key, x => x.Value);
-        if (Shell.Current.CurrentPage?.BindingContext is INavigationAware navAware)
-            navAware.OnNavigatingFrom(parameters);
-
-        var navType = relativeNavigation ? NavigationType.Push : NavigationType.SetRoot;
-        this.RaiseNavigating(Shell.Current, route, navType, parameters);
-        this.isProgrammaticNavigation = true;
-
-        // Resolve and configure the viewmodel synchronously. Pin the instance
-        // on the configurator so whichever apply site fires
-        // (ShinyRouteFactory.GetOrCreate for registered routes,
-        // ShinyShell.OnNavigated for ShellContent routes, or AppOnPageAppearing
-        // as a fallback) consumes our instance instead of resolving a fresh one
-        // from DI. The configure callback runs before pinning so every downstream
-        // hook — including IPageLifecycleAware.OnAppearing on whatever schedule
-        // Shell decides to fire it — observes a fully initialised viewmodel.
+        // Resolve and configure the viewmodel synchronously. Pin the instance on the configurator
+        // so whichever apply site fires (ShinyRouteFactory.GetOrCreate for registered routes,
+        // ShinyShell.OnNavigated for ShellContent routes, or AppOnPageAppearing as a fallback)
+        // consumes our instance instead of resolving a fresh one from DI. The configure callback
+        // runs first so every downstream hook - interceptors included, then
+        // IPageLifecycleAware.OnAppearing on whatever schedule Shell decides - observes a fully
+        // initialised viewmodel.
+        //
+        // Firing the navigation itself is left to ExecuteNavigation. GoToAsync throws
+        // synchronously for an unknown route, which surfaces as the awaited Task's exception - the
+        // only failure mode the navigator needs to report. We deliberately don't probe
+        // Shell.Current.CurrentPage afterwards: on Android the awaiter can resolve before Shell's
+        // CurrentItem chain updates and before Shell.OnNavigated / PageAppearing fire, so a
+        // post-await BindingContext check races against Shell's own scheduling.
         var vm = (TViewModel)services.GetRequiredService(typeof(TViewModel)!);
         configure?.Invoke(vm);
-        var subscription = configurator.EnqueueResolved(typeof(TViewModel), vm!);
 
-        try
+        return this.RunNavigation(new NavigationRequest(
+            route,
+            relativeNavigation ? NavigationType.Push : NavigationType.SetRoot,
+            args.ToDictionary(x => x.Key, x => x.Value)
+        )
         {
-            // Fire the navigation. GoToAsync throws synchronously for an unknown
-            // route, which surfaces as the awaited Task's exception — the only
-            // failure mode the navigator needs to report. After the awaiter
-            // resolves we deliberately don't probe Shell.Current.CurrentPage:
-            // on Android the awaiter can resolve before Shell's CurrentItem
-            // chain updates and before Shell.OnNavigated / PageAppearing fire,
-            // so a post-await BindingContext check races against Shell's own
-            // scheduling. The pinned viewmodel + apply-site model handles
-            // that timing naturally — once Shell raises PageAppearing for the
-            // target page (immediately, or on the next dispatcher tick), the
-            // apply site consumes the pinned instance and binds it before
-            // OnAppearing runs.
-            await mainThread.InvokeOnMainThreadAsync(() => Shell.Current.GoToAsync(route, true, parameters));
-        }
-        catch
-        {
-            // Only roll back the pinned entry when navigation actually failed.
-            // On success we leave it pinned because the apply site has not yet
-            // fired (typically runs on the next dispatcher tick) and disposing
-            // would cause it to fall back to a fresh DI resolve, throwing away
-            // our configured instance.
-            subscription.Dispose();
-            throw;
-        }
+            Pins = [new PinnedViewModel(typeof(TViewModel), vm!)],
+            ViewModel = vm,
+            ViewModelType = typeof(TViewModel),
+            BypassInterceptors = bypassInterceptors,
+            CancellationToken = cancellationToken
+        });
     }
 
-    
+
     /// <summary>
     /// Navigation core shared with <see cref="AppLinkRouter"/>. The ViewModel arrives already
-    /// resolved and populated, so this only pins it and issues the Shell navigation - which keeps
-    /// app links on the exact same path as <see cref="NavigateTo{TViewModel}"/> instead of opening
-    /// a second one that would have to rediscover its Android timing behaviour.
+    /// resolved and populated, so this only hands it to the same interception-and-pin path as
+    /// <see cref="NavigateTo{TViewModel}"/> - which is what puts inbound links behind the app's
+    /// <see cref="INavigationInterceptor"/>s, and keeps them off a second navigation path that
+    /// would have to rediscover Android's timing behaviour.
     /// </summary>
     /// <param name="viewModelType">The ViewModel type to pin for the apply sites.</param>
     /// <param name="viewModel">The populated ViewModel instance.</param>
     /// <param name="route">An absolute ("//"-prefixed) or relative route.</param>
-    internal async Task NavigateToAppLink(Type viewModelType, object viewModel, string route)
-    {
-        var parameters = new Dictionary<string, object>();
-        if (Shell.Current.CurrentPage?.BindingContext is INavigationAware navAware)
-            navAware.OnNavigatingFrom(parameters);
-
-        var navType = route.StartsWith("//", StringComparison.Ordinal)
-            ? NavigationType.SetRoot
-            : NavigationType.Push;
-
-        this.RaiseNavigating(Shell.Current, route, navType, parameters);
-        this.isProgrammaticNavigation = true;
-
-        var subscription = configurator.EnqueueResolved(viewModelType, viewModel);
-        try
+    internal Task<bool> NavigateToAppLink(Type viewModelType, object viewModel, string route)
+        => this.RunNavigation(new NavigationRequest(
+            route,
+            NavigationUri.GetNavigationType(route),
+            new Dictionary<string, object>()
+        )
         {
-            await mainThread
-                .InvokeOnMainThreadAsync(() => Shell.Current.GoToAsync(route, true, parameters))
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            // Only roll back on failure - on success the apply site has not fired yet and
-            // disposing would throw away the populated instance.
-            subscription.Dispose();
-            throw;
-        }
-    }
+            Pins = [new PinnedViewModel(viewModelType, viewModel)],
+            ViewModel = viewModel,
+            ViewModelType = viewModelType
+        });
 
 
     public async Task<DialogResult<T>> ShowDialog<TViewModel, T>(
@@ -320,21 +470,40 @@ public class ShinyShellNavigator(
     }
 
 
-    public Task PopToRoot(params IEnumerable<(string Key, object Value)> args)
+    public Task<bool> PopToRoot(params IEnumerable<(string Key, object Value)> args)
+        => this.PopToRoot(false, default, args);
+
+
+    public Task<bool> PopToRoot(
+        bool bypassInterceptors,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    )
     {
         // we already have 1 page covered and we don't want to pop the last page
         var count = Shell.Current.Navigation.NavigationStack.Count - 1;
         if (count < 1)
             count = 1;
 
-        return this.DoGoBack(count, NavigationType.PopToRoot, args);
+        return this.DoGoBack(count, NavigationType.PopToRoot, bypassInterceptors, cancellationToken, args);
     }
 
 
-    public Task GoBack(params IEnumerable<(string Key, object Value)> args) => this.DoGoBack(1, NavigationType.GoBack, args);
+    public Task<bool> GoBack(params IEnumerable<(string Key, object Value)> args)
+        => this.DoGoBack(1, NavigationType.GoBack, false, default, args);
 
 
-    public Task GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args) => this.DoGoBack(backCount, NavigationType.GoBack, args);
+    public Task<bool> GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args)
+        => this.DoGoBack(backCount, NavigationType.GoBack, false, default, args);
+
+
+    public Task<bool> GoBack(
+        int backCount,
+        bool bypassInterceptors,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    )
+        => this.DoGoBack(backCount, NavigationType.GoBack, bypassInterceptors, cancellationToken, args);
 
 
     public async Task SwitchShell(Shell shell)
@@ -425,57 +594,167 @@ public class ShinyShellNavigator(
     }
 
 
-    Task DoGoBack(int backCount, NavigationType navType, IEnumerable<(string Key, object Value)> args) => mainThread.InvokeOnMainThreadAsync(() =>
+    Task<bool> DoGoBack(
+        int backCount,
+        NavigationType navType,
+        bool bypassInterceptors,
+        CancellationToken cancellationToken,
+        IEnumerable<(string Key, object Value)> args
+    )
     {
         if (backCount < 1)
             throw new ArgumentException("Back count must be 1 or more");
 
-        var uri = String.Empty;
-        for (var i = 0; i < backCount; i++)
-        {
-            if (i > 0)
-                uri += "/";
-
-            uri += "..";
-        }
-
-        var shell = Shell.Current;
+        var uri = String.Join("/", Enumerable.Repeat("..", backCount));
         var parameters = args.ToDictionary(x => x.Key, x => x.Value);
-        if (shell.CurrentPage?.BindingContext is INavigationAware navAware)
-            navAware.OnNavigatingFrom(parameters);
 
-        this.RaiseNavigating(shell, uri, navType, parameters);
-        this.isProgrammaticNavigation = true;
-        return shell.GoToAsync(uri, true, parameters);
-    });
+        return mainThread.InvokeOnMainThreadAsync(() =>
+        {
+            // Going back lands on a page that already exists, so interceptors get the ViewModel
+            // off the navigation stack rather than a freshly built one - and it is never pinned.
+            var stack = Shell.Current.Navigation.NavigationStack;
+            var index = stack.Count - 1 - backCount;
+            var targetViewModel = index >= 0 && index < stack.Count
+                ? stack[index]?.BindingContext
+                : null;
+
+            return this.RunNavigationCore(new NavigationRequest(uri, navType, parameters)
+            {
+                ViewModel = targetViewModel,
+                ViewModelType = targetViewModel?.GetType(),
+                BypassInterceptors = bypassInterceptors,
+                CancellationToken = cancellationToken
+            });
+        });
+    }
     
     
     void AppOnDescendantAdded(object? sender, ElementEventArgs args)
     {
         if (args.Element is Shell shell)
         {
-            shell.Navigating += async (_, shellArgs) =>
-            {
-                if (this.isProgrammaticNavigation)
-                {
-                    this.isProgrammaticNavigation = false;
-                    return;
-                }
-                
-                var vm = shell.CurrentPage?.BindingContext;
-
-                if (vm is INavigationConfirmation confirm)
-                {
-                    var deferral = shellArgs.GetDeferral();
-                    var canNav = await confirm.CanNavigate();
-                    if (!canNav)
-                        shellArgs.Cancel();
-
-                    deferral.Complete();
-                }
-            };
+            // Detach first - DescendantAdded can fire again for a Shell that is re-parented, and
+            // a doubled handler would ask every guard twice.
+            shell.Navigating -= this.OnShellNavigating;
+            shell.Navigating += this.OnShellNavigating;
         }
     }
+
+
+    /// <summary>
+    /// The guard for navigation Shiny did not start - a tab tap, a flyout item, the hardware back
+    /// button. <see cref="INavigationConfirmation"/> on the page being left is asked first (it
+    /// owns the "may I leave" question), then the interceptors get their say on the destination.
+    /// </summary>
+    async void OnShellNavigating(object? sender, ShellNavigatingEventArgs shellArgs)
+    {
+        if (this.isProgrammaticNavigation)
+        {
+            this.isProgrammaticNavigation = false;
+            return;
+        }
+
+        if (sender is not Shell shell)
+            return;
+
+        var vm = shell.CurrentPage?.BindingContext;
+        var hasInterceptors = interceptors.HasInterceptors;
+        if (vm is not INavigationConfirmation && !hasInterceptors)
+            return;
+
+        // Anything awaited past this point needs the deferral, or Shell completes the navigation
+        // underneath us.
+        var deferral = shellArgs.GetDeferral();
+        NavigationRequest? redirect = null;
+        try
+        {
+            if (vm is INavigationConfirmation confirm && !await confirm.CanNavigate())
+            {
+                shellArgs.Cancel();
+                return;
+            }
+
+            if (!hasInterceptors)
+                return;
+
+            var uri = shellArgs.Target?.Location?.ToString();
+            if (String.IsNullOrWhiteSpace(uri))
+                return;
+
+            var navType = ToNavigationType(shellArgs.Source);
+            var parameters = new Dictionary<string, object>();
+
+            // ResolveViewModel is false here: Shell is building this destination itself, so
+            // constructing a ViewModel for the interceptors would create one nobody binds.
+            var interception = await interceptors
+                .Run(uri, navType, parameters)
+                .ConfigureAwait(true);
+
+            if (interception.IsCancelled)
+            {
+                shellArgs.Cancel();
+                return;
+            }
+
+            if (interception.IsRedirected)
+            {
+                // Shell's own navigation is abandoned and reissued as ours, which is what lets the
+                // redirect target get a pinned, interceptor-visible ViewModel.
+                shellArgs.Cancel();
+                redirect = new NavigationRequest(
+                    interception.Uri,
+                    NavigationUri.GetNavigationType(interception.Uri),
+                    parameters
+                )
+                {
+                    Pins = this.CanPinResolved(interception, interception.Uri)
+                        ? [new PinnedViewModel(interception.ViewModelType!, interception.ViewModel!)]
+                        : []
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            // A throwing guard must not let the navigation through, and there is no caller to
+            // report to on this path - Shell raised the event.
+            logger.LogError(ex, "[Navigation] Interception of '{uri}' failed - navigation cancelled", shellArgs.Target?.Location);
+            shellArgs.Cancel();
+        }
+        finally
+        {
+            deferral.Complete();
+        }
+
+        if (redirect == null)
+            return;
+
+        // Posted rather than issued inline: Shell is still unwinding the navigation we just
+        // cancelled, and starting the next one on top of that is how you get a Shell that has
+        // moved but thinks it hasn't. The interceptors have already approved this destination, so
+        // it goes straight to ExecuteNavigation rather than round the pipeline again.
+        mainThread.BeginInvokeOnMainThread(async () =>
+        {
+            try
+            {
+                await this.ExecuteNavigation(redirect.Uri, redirect.NavigationType, redirect.Parameters, redirect.Pins, false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "[Navigation] Redirect to '{uri}' failed", redirect.Uri);
+            }
+        });
+    }
+
+
+    static NavigationType ToNavigationType(ShellNavigationSource source) => source switch
+    {
+        ShellNavigationSource.Pop => NavigationType.GoBack,
+        ShellNavigationSource.PopToRoot => NavigationType.PopToRoot,
+        ShellNavigationSource.ShellItemChanged or
+        ShellNavigationSource.ShellSectionChanged or
+        ShellNavigationSource.ShellContentChanged => NavigationType.SetRoot,
+        _ => NavigationType.Push
+    };
     
     
     void AppOnDescendantRemoved(object? sender, ElementEventArgs args)

@@ -864,13 +864,16 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 }
 
                 sb.AppendLine($"    /// <param name=\"relativeNavigation\">If true, it will navigate/stack from where the application currently is otherwise, it will reset the stack to this new route</param>");
+                sb.AppendLine($"    /// <param name=\"bypassInterceptors\">Skips the registered INavigationInterceptors</param>");
+                sb.AppendLine($"    /// <param name=\"cancellationToken\">Passed to the interceptors</param>");
+                sb.AppendLine($"    /// <returns>True when the navigation happened; false when an interceptor cancelled it</returns>");
             }
 
             // [Description] on method
             if (cls.Description != null)
                 sb.AppendLine($"    [global::System.ComponentModel.Description(\"{EscapeString(cls.Description)}\")]");
 
-            sb.Append($"    public static global::System.Threading.Tasks.Task {methodName}(this global::Shiny.INavigator navigator");
+            sb.Append($"    public static global::System.Threading.Tasks.Task<bool> {methodName}(this global::Shiny.INavigator navigator");
 
             // Add required parameters first
             foreach (var prop in requiredParams)
@@ -896,6 +899,10 @@ public class ShinyShellGenerator : IIncrementalGenerator
             else
                 sb.Append(", bool relativeNavigation = true");
 
+            // Interceptor controls mirror INavigator so a generated call is never the weaker option.
+            sb.Append(", bool bypassInterceptors = false");
+            sb.Append(", global::System.Threading.CancellationToken cancellationToken = default");
+
             // If no properties, add the params argument
             if (!cls.Properties.Any())
             {
@@ -914,11 +921,11 @@ public class ShinyShellGenerator : IIncrementalGenerator
                 sb.Append(string.Join("; ", assignments));
                 sb.Append(";");
 
-                sb.AppendLine($" }}, relativeNavigation);");
+                sb.AppendLine($" }}, relativeNavigation, bypassInterceptors, cancellationToken);");
             }
             else
             {
-                sb.AppendLine($"        return navigator.NavigateTo<{cls.ViewModelFullName}>(configure: null, relativeNavigation: relativeNavigation, args: args);");
+                sb.AppendLine($"        return navigator.NavigateTo<{cls.ViewModelFullName}>(configure: null, relativeNavigation: relativeNavigation, bypassInterceptors: bypassInterceptors, cancellationToken: cancellationToken, args: args);");
             }
 
             sb.AppendLine("    }");
@@ -1287,6 +1294,8 @@ public class ShinyShellGenerator : IIncrementalGenerator
         sb.AppendLine("        [global::System.ComponentModel.Description(\"The route name to navigate to\")] string route,");
         sb.AppendLine("        [global::System.ComponentModel.Description(\"Route parameters as key-value pairs where keys are parameter names from GetGeneratedRouteInfo\")] global::System.Collections.Generic.Dictionary<string, string>? args = null)");
         sb.AppendLine("    {");
+        // Declared once outside the switch - every case assigns it, and case labels share a scope.
+        sb.AppendLine("        bool navigated;");
         sb.AppendLine("        switch (route)");
         sb.AppendLine("        {");
 
@@ -1295,7 +1304,7 @@ public class ShinyShellGenerator : IIncrementalGenerator
             sb.AppendLine($"            case \"{EscapeString(cls.Route)}\":");
             if (cls.Properties.Any())
             {
-                sb.AppendLine($"                await _navigator.NavigateTo<{cls.ViewModelFullName}>(vm =>");
+                sb.AppendLine($"                navigated = await _navigator.NavigateTo<{cls.ViewModelFullName}>(vm =>");
                 sb.AppendLine("                {");
                 sb.AppendLine("                    if (args != null)");
                 sb.AppendLine("                    {");
@@ -1311,9 +1320,13 @@ public class ShinyShellGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.AppendLine($"                await _navigator.NavigateTo<{cls.ViewModelFullName}>();");
+                sb.AppendLine($"                navigated = await _navigator.NavigateTo<{cls.ViewModelFullName}>();");
             }
-            sb.AppendLine($"                return $\"Successfully navigated to {EscapeString(cls.Route)}\";");
+            // A guard can turn the agent away just like it turns a button tap away - saying so is
+            // more useful to the model than a success message that was not true.
+            sb.AppendLine($"                return navigated");
+            sb.AppendLine($"                    ? $\"Successfully navigated to {EscapeString(cls.Route)}\"");
+            sb.AppendLine($"                    : $\"Navigation to {EscapeString(cls.Route)} was blocked by the application\";");
         }
 
         sb.AppendLine("            default:");

@@ -65,6 +65,52 @@ public sealed class ShinyAppBuilder(MauiAppBuilder builder)
 
 
     /// <summary>
+    /// Registers a navigation guard. Interceptors run in registration order on every navigation -
+    /// <see cref="INavigator"/> calls, app links, shortcuts, and user-driven Shell navigation -
+    /// and the first one to cancel or redirect wins.
+    /// </summary>
+    /// <remarks>Ordering is the interceptor's own business - override <see cref="INavigationInterceptor.Order"/>.</remarks>
+    /// <typeparam name="TInterceptor">The interceptor. Registered as a singleton; register it yourself for any other lifetime.</typeparam>
+    public ShinyAppBuilder AddNavigationInterceptor<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TInterceptor
+    >() where TInterceptor : class, INavigationInterceptor
+    {
+        builder.Services.AddSingleton<INavigationInterceptor, TInterceptor>();
+        return this;
+    }
+
+
+    /// <summary>
+    /// Registers an already-constructed navigation guard.
+    /// </summary>
+    public ShinyAppBuilder AddNavigationInterceptor(INavigationInterceptor interceptor)
+    {
+        ArgumentNullException.ThrowIfNull(interceptor);
+
+        builder.Services.AddSingleton(interceptor);
+        return this;
+    }
+
+
+    /// <summary>
+    /// Registers a navigation guard written inline - enough for logging or a one-line rule,
+    /// without a class for it.
+    /// </summary>
+    /// <param name="interceptor">Receives the destination URI, its ViewModel and the navigation's token, and returns what should happen.</param>
+    /// <param name="order">Lowest runs first; ties keep registration order. The class equivalent is <see cref="INavigationInterceptor.Order"/>.</param>
+    public ShinyAppBuilder AddNavigationInterceptor(
+        Func<string, object?, CancellationToken, Task<NavigationInterceptorResult>> interceptor,
+        int order = 0
+    )
+    {
+        ArgumentNullException.ThrowIfNull(interceptor);
+
+        builder.Services.AddSingleton<INavigationInterceptor>(new DelegateNavigationInterceptor(interceptor, order));
+        return this;
+    }
+
+
+    /// <summary>
     /// Optional tuning for inbound app links. App links declared through the <c>appLinks</c>
     /// argument of <see cref="ShellMapAttribute{TPage}"/> are installed automatically by
     /// <c>AddGeneratedMaps()</c> - this is only needed to change the defaults.

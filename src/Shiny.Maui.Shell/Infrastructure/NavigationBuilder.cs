@@ -1,13 +1,8 @@
-using Microsoft.Extensions.Logging;
-
 namespace Shiny.Infrastructure;
 
 public class NavigationBuilder(
     ShinyShellNavigator navigator,
     ShinyAppBuilder navBuilder,
-    ShellNavigationConfigurator configurator,
-    IMainThread mainThread,
-    ILogger logger,
     bool fromRoot
 ) : INavigationBuilder
 {
@@ -15,6 +10,14 @@ public class NavigationBuilder(
 
     readonly List<Segment> segments = new();
     int popCount;
+    bool skipInterceptors;
+
+
+    public INavigationBuilder BypassInterceptors()
+    {
+        this.skipInterceptors = true;
+        return this;
+    }
 
     public INavigationBuilder PopBack(int count)
     {
@@ -55,22 +58,21 @@ public class NavigationBuilder(
         return this;
     }
 
-    public async Task Navigate()
+    public Task<bool> Navigate(bool bypassInterceptors = false, CancellationToken cancellationToken = default)
     {
         if (this.popCount == 0 && this.segments.Count == 0)
             throw new InvalidOperationException("No navigation segments have been added");
 
         var uri = this.BuildUri();
-        var parameters = new Dictionary<string, object>();
         var navType = fromRoot ? NavigationType.SetRoot : NavigationType.Push;
 
-        // Pre-resolve each typed segment's viewmodel, apply its configure callback
-        // synchronously, and pin the instance on the configurator. The apply sites
-        // (ShinyRouteFactory.GetOrCreate, ShinyShell.OnNavigated, AppOnPageAppearing)
-        // consume the pinned instances in FIFO + type order matching the order Shell
-        // realises each segment's page. No post-await stack walk is required because
-        // the configure callbacks have already run before any page is constructed.
-        var subscriptions = new List<IDisposable>(this.segments.Count);
+        // Pre-resolve each typed segment's viewmodel and apply its configure callback
+        // synchronously, then hand them to the navigator to pin. The apply sites
+        // (ShinyRouteFactory.GetOrCreate, ShinyShell.OnNavigated, AppOnPageAppearing) consume the
+        // pinned instances in FIFO + type order matching the order Shell realises each segment's
+        // page. No post-await stack walk is required because the configure callbacks have already
+        // run before any page is constructed.
+        var pins = new List<ShinyShellNavigator.PinnedViewModel>(this.segments.Count);
         foreach (var seg in this.segments)
         {
             if (seg.ViewModelType == null)
@@ -78,26 +80,31 @@ public class NavigationBuilder(
 
             var vm = navigator.Services.GetRequiredService(seg.ViewModelType);
             seg.ConfigureAction?.DynamicInvoke(vm);
-            subscriptions.Add(configurator.EnqueueResolved(seg.ViewModelType, vm));
+            pins.Add(new ShinyShellNavigator.PinnedViewModel(seg.ViewModelType, vm));
         }
 
-        navigator.PrepareForProgrammaticNavigation(uri, navType, parameters);
+        // Interceptors are shown the destination - the last segment - since that is the page the
+        // user ends up on. A redirect drops every pin here, because none of those pages get built.
+        // A destination added by raw route name has nothing pinned, so the pipeline resolves it.
+        var last = this.segments.Count > 0 ? this.segments[^1] : null;
+        var destination = last?.ViewModelType != null ? pins[^1] : default;
 
-        try
+        return navigator.RunNavigation(new ShinyShellNavigator.NavigationRequest(
+            uri,
+            navType,
+            new Dictionary<string, object>()
+        )
         {
-            await mainThread.InvokeOnMainThreadAsync(() => Shell.Current.GoToAsync(uri, true, parameters));
-        }
-        catch
-        {
-            // Only roll back pinned entries when navigation actually failed.
-            // On success we leave them pinned because the apply sites typically
-            // fire on the next dispatcher tick (notably on Android), and
-            // disposing here would cause them to fall back to a fresh DI resolve.
-            foreach (var sub in subscriptions)
-                sub.Dispose();
-            throw;
-        }
+            Pins = pins,
+            ViewModel = destination.Instance,
+            ViewModelType = destination.Type,
+            ResolveViewModel = last != null && last.ViewModelType == null,
+            // Either way of asking counts - the fluent call and the argument mean the same thing.
+            BypassInterceptors = bypassInterceptors || this.skipInterceptors,
+            CancellationToken = cancellationToken
+        });
     }
+
 
     string BuildUri()
     {

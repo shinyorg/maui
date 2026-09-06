@@ -80,7 +80,7 @@ public class AppLinkRouter(
     }
 
 
-    public Task<bool> Handle(Uri uri)
+    public Task<AppLinkResult> Handle(Uri uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
 
@@ -88,7 +88,7 @@ public class AppLinkRouter(
         {
             // Reported as handled - it was, a moment ago.
             logger.LogDebug("[AppLink] Ignoring duplicate activation '{uri}'", uri);
-            return Task.FromResult(true);
+            return Task.FromResult(AppLinkResult.Navigated);
         }
 
         if (!this.flushed && Shell.Current == null)
@@ -97,14 +97,14 @@ public class AppLinkRouter(
             // will be acted on; telling the platform otherwise invites a duplicate delivery.
             logger.LogDebug("[AppLink] Shell not ready, queueing '{uri}'", uri);
             this.pending = uri;
-            return Task.FromResult(true);
+            return Task.FromResult(AppLinkResult.Navigated);
         }
 
         return this.Navigate(uri, coldStart: false);
     }
 
 
-    async Task<bool> Navigate(Uri uri, bool coldStart)
+    async Task<AppLinkResult> Navigate(Uri uri, bool coldStart)
     {
         try
         {
@@ -132,23 +132,34 @@ public class AppLinkRouter(
                 var route = AppLinkRoutes.Build(match, link, coldStart, options);
                 logger.LogInformation("[AppLink] '{uri}' -> '{route}'", uri, route);
 
-                await navigator
+                var navigated = await navigator
                     .NavigateToAppLink(link.ViewModelType, vm, route)
                     .ConfigureAwait(false);
 
-                return true;
+                if (navigated)
+                    return AppLinkResult.Navigated;
+
+                // A guard turned the link away. That is still the app handling it - reporting it
+                // unhandled would invite the platform to open the URL in a browser instead, which
+                // is the opposite of what a guard that just blocked it wants.
+                logger.LogInformation("[AppLink] '{uri}' was blocked by an interceptor", uri);
+                return AppLinkResult.Blocked;
             }
 
             logger.LogWarning("[AppLink] No route matched '{uri}'", uri);
             if (options.OnUnhandled != null)
-                return await options.OnUnhandled.Invoke(uri).ConfigureAwait(false);
+            {
+                return await options.OnUnhandled.Invoke(uri).ConfigureAwait(false)
+                    ? AppLinkResult.Navigated
+                    : AppLinkResult.Unhandled;
+            }
 
-            return false;
+            return AppLinkResult.Unhandled;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "[AppLink] Failed to handle '{uri}'", uri);
-            return false;
+            return AppLinkResult.Unhandled;
         }
     }
 }

@@ -234,7 +234,7 @@ public static class Navigate
 
         var navigator = services.GetRequiredService<INavigator>();
         var parameters = BuildParameters(bindable);
-        return navigator.NavigateTo(route, GetRelativeNavigation(bindable), parameters);
+        return navigator.NavigateTo(route, GetRelativeNavigation(bindable), args: parameters);
     }
 
 

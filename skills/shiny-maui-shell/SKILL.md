@@ -87,6 +87,21 @@ triggers:
   - NavigationBuilder
   - Navigating
   - Navigated
+  - INavigationInterceptor
+  - NavigationInterceptorResult
+  - AddNavigationInterceptor
+  - navigation interceptor
+  - navigation guard
+  - navigation middleware
+  - cancel navigation
+  - redirect navigation
+  - auth guard
+  - route guard
+  - INavigationContextAccessor
+  - NavigationContext
+  - NavigationDirection
+  - bypassInterceptors
+  - AppLinkResult
   - IDialogs
   - Alert
   - Confirm
@@ -159,6 +174,7 @@ Shiny MAUI Shell wraps .NET MAUI Shell to provide:
 - Attached-property XAML navigation via `Navigate.Route`, `Navigate.RelativeNavigation`, and parameter helpers
 - Shell switching — swap the entire Shell at runtime (e.g., login → main app)
 - ViewModel lifecycle interfaces (appearing, disappearing, dispose, navigation confirmation)
+- `INavigationInterceptor` guards that can cancel or redirect any navigation - including app links, shortcuts and tab taps
 - Source generators that eliminate boilerplate route registration, produce strongly-typed navigation methods, and generate AI tool metadata
 - `ShinyShell` base class for deterministic initial-page BindingContext assignment
 - `ShellServices` record that aggregates `INavigator`, `IDialogs`, and `IMainThread` for convenient single-parameter injection
@@ -337,7 +353,7 @@ Implement these interfaces on ViewModels as needed:
 | Interface | Purpose |
 |-----------|---------|
 | `IPageLifecycleAware` | `OnAppearing()` / `OnDisappearing()` hooks |
-| `INavigationConfirmation` | `Task<bool> CanNavigate()` - confirm before leaving |
+| `INavigationConfirmation` | `Task<bool> CanNavigate()` - confirm before leaving. **Only asked for user-driven Shell navigation** (tab tap, flyout, hardware back), not for `INavigator` calls - use an `INavigationInterceptor` to guard those |
 | `INavigationAware` | `OnNavigatingFrom(IDictionary<string, object>)` - mutate args before leaving |
 | `IQueryAttributable` | `ApplyQueryAttributes(IDictionary<string, object>)` - receive navigation args (only needed for string-based `NavigateTo(route, args)` — not needed when using `[ShellProperty]`) |
 | `IDisposable` | Cleanup when page is removed from navigation stack |
@@ -362,6 +378,106 @@ navigator.Navigated += (sender, args) =>
 ```
 
 Hook these events in an `IMauiInitializeService` for cross-cutting concerns like logging or analytics.
+
+### 4a. Navigation Interceptors (guards)
+
+Use `INavigationInterceptor` when navigation must be **blocked or rerouted** - auth guards, unsaved
+changes, feature flags. Use the `Navigating`/`Navigated` events when you only need to observe.
+
+```csharp
+public class AuthNavigationInterceptor(IAuthService auth) : INavigationInterceptor
+{
+    public int Order => -100;   // guards before observers; ties keep registration order
+
+    public async Task<NavigationInterceptorResult> InterceptNavigationAsync(
+        string uri,
+        object? viewModel,
+        CancellationToken cancellationToken
+    )
+    {
+        if (await auth.IsAuthorized(cancellationToken) || uri.Contains("Login"))
+            return NavigationInterceptorResult.Continue;
+
+        return NavigationInterceptorResult.Redirect<LoginViewModel>();
+    }
+}
+```
+
+Register in `MauiProgram.cs` - they run in registration order, first to cancel or redirect wins:
+
+```csharp
+builder.UseShinyShell(x => x
+    .AddGeneratedMaps()
+    .AddNavigationInterceptor<AuthNavigationInterceptor>()
+    .AddNavigationInterceptor<AuditNavigationInterceptor>()
+    // inline for one-liners
+    .AddNavigationInterceptor((uri, vm, ct) => Task.FromResult(NavigationInterceptorResult.Continue), order: 100)
+);
+```
+
+**Results:**
+
+| Result | Behaviour |
+|:-------|:----------|
+| `NavigationInterceptorResult.Continue` | Next interceptor, then navigate |
+| `Cancel()` | Nothing navigates; the caller's `Task` completes normally |
+| `Redirect("Detail")` | Push |
+| `Redirect("//Main/Home")` / `Redirect("/Login")` | Reset the stack (single leading `/` is promoted to `//`) |
+| `Redirect<LoginViewModel>()` | Reset the stack to that ViewModel's route - **prefer this**, it is refactor-safe |
+| `Redirect<DetailViewModel>(relativeNavigation: true)` | Push that ViewModel's route |
+
+**Rules to generate correctly:**
+
+- The `viewModel` argument is the **destination** ViewModel, already resolved and populated
+  (`configure` callback run, app link values applied). Mutating it is allowed - that instance is
+  bound to the page, except on a `registerRoute: false` (ShellContent) page that is already
+  realised, which keeps the ViewModel it already has. It is `null` for unmapped routes and for Shell-driven navigation (tab taps,
+  hardware back), so always null-check or pattern-match: `if (viewModel is DetailViewModel vm)`.
+- The ViewModel being **left** comes from `INavigationContextAccessor.Current.FromViewModel` -
+  inject `INavigationContextAccessor` for that, plus `FromUri`, `ToUri`, `NavigationType`,
+  `Parameters`, `RedirectCount`.
+- A redirect re-runs the whole chain against the new URI. Guard against redirecting to the page you
+  are guarding (check the URI or ViewModel type first), or it just gets ignored; a real loop throws
+  after 10 hops.
+- Interceptors cover `INavigator` calls, the navigation builder, back navigation, app links, app
+  shortcuts and user-driven Shell navigation. They do **not** cover `ShowDialog` or `SwitchShell`.
+- Anything thrown propagates to the caller and the navigation does not happen.
+- Interceptors are registered as singletons - do not hold per-navigation state in fields.
+- Ordering is `Order` (lowest first) then registration order. Put guards below 0 and observers above.
+- Every `INavigator` navigation method returns `Task<bool>` - false means an interceptor cancelled
+  it (a redirect returns true). Generated `NavigateTo{Route}` methods return `Task<bool>` too.
+- To navigate **from inside** a guard, or for any navigation that must not be guarded, pass
+  `bypassInterceptors: true`: `NavigateTo<LoginViewModel>(bypassInterceptors: true)`,
+  `GoBack(1, bypassInterceptors: true)`, `PopToRoot(bypassInterceptors: true)`,
+  `CreateBuilder()...Navigate(bypassInterceptors: true)` or the fluent
+  `CreateBuilder().BypassInterceptors()...Navigate()`. A `RedirectUri` does not need it.
+- `INavigationContextAccessor.Current.Direction` gives `Forward` / `Back` / `Root` when the rule
+  only cares which way the user is going; `.GetDirection()` converts any `NavigationType`.
+- An inbound app link a guard blocks reports `AppLinkResult.Blocked` from `IAppLinks.Handle`
+  (distinct from `Unhandled`, which means nothing matched).
+
+```csharp
+// Unsaved-changes guard: uses the page being left, not the destination
+public class UnsavedChangesInterceptor(
+    INavigationContextAccessor context,
+    IDialogs dialogs
+) : INavigationInterceptor
+{
+    public async Task<NavigationInterceptorResult> InterceptNavigationAsync(
+        string uri,
+        object? viewModel,
+        CancellationToken cancellationToken
+    )
+    {
+        if (context.Current?.FromViewModel is not IUnsavedChanges { HasUnsavedChanges: true })
+            return NavigationInterceptorResult.Continue;
+
+        return await dialogs.Confirm("Unsaved Changes", "Discard changes?")
+            ? NavigationInterceptorResult.Continue
+            : NavigationInterceptorResult.Cancel();
+    }
+}
+```
 
 ### 5. Navigation
 
@@ -1025,7 +1141,7 @@ public partial class DetailViewModel(INavigator navigator, IDialogs dialogs) : O
 5. **Use `[ShellProperty]`** - Properties are set directly by generated navigation methods — no `IQueryAttributable` needed
 6. **Use ObservableObject** - From CommunityToolkit.Mvvm as the ViewModel base class
 7. **Implement IDisposable** - Clean up event handlers and subscriptions to prevent memory leaks
-8. **Use CanNavigate for guards** - Protect unsaved changes with `INavigationConfirmation`
+8. **Use CanNavigate for guards** - Protect unsaved changes with `INavigationConfirmation`; use `INavigationInterceptor` when the rule is app-wide or needs to redirect (auth, feature flags)
 9. **Mark ViewModel partial** - Required when using `[ShellMap]` source generation and CommunityToolkit attributes
 10. **Pass results via GoBack args** - Return data to the previous page through navigation parameters
 11. **Use tab badges only on shell tabs** - Badge APIs resolve existing tab routes in the active Shell

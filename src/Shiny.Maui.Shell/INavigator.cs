@@ -20,12 +20,16 @@ public interface INavigator
     /// must implement the <see cref="IQueryAttributable"/> interface.</remarks>
     /// <param name="route">The route to navigate to. This should be a valid route string recognized by the navigation system.</param>
     /// <param name="relativeNavigation">Assumes relative navigation (page1/page2), if set to false, assumes root navigation "//" </param>
+    /// <param name="bypassInterceptors">Skips the registered <see cref="INavigationInterceptor"/>s - for the navigation a guard itself performs, which must not be guarded again.</param>
+    /// <param name="cancellationToken">Passed to the interceptors; cancelling abandons the navigation with an <see cref="OperationCanceledException"/>.</param>
     /// <param name="args">A collection of key-value pairs representing the arguments to pass to the target page or view model. Each key
     /// must be unique.</param>
-    /// <returns>A task that represents the asynchronous navigation operation.</returns>
-    Task NavigateTo(
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it. A redirected navigation returns true - it happened, somewhere else.</returns>
+    Task<bool> NavigateTo(
         string route,
         bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
         params IEnumerable<(string Key, object Value)> args
     );
 
@@ -40,12 +44,16 @@ public interface INavigator
     /// <param name="configure">An optional action to configure the view model before navigation. This can be used to set up properties or
     /// perform initialization.</param>
     /// <param name="relativeNavigation">Assumes relative navigation (page1/page2), if set to false, assumes root navigation "//" </param>
+    /// <param name="bypassInterceptors">Skips the registered <see cref="INavigationInterceptor"/>s - for the navigation a guard itself performs, which must not be guarded again.</param>
+    /// <param name="cancellationToken">Passed to the interceptors; cancelling abandons the navigation with an <see cref="OperationCanceledException"/>.</param>
     /// <param name="args">A collection of key-value pairs representing arguments to pass to the view during navigation. Each key must be
     /// unique.</param>
-    /// <returns>A task that represents the asynchronous navigation operation.</returns>
-    Task NavigateTo<TViewModel>(
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it.</returns>
+    Task<bool> NavigateTo<TViewModel>(
         Action<TViewModel>? configure = null, 
         bool relativeNavigation = true,
+        bool bypassInterceptors = false,
+        CancellationToken cancellationToken = default,
         params IEnumerable<(string Key, object Value)> args
     );
 
@@ -83,8 +91,21 @@ public interface INavigator
     /// </summary>
     /// <param name="args">A collection of key-value pairs representing parameters to pass to the target view or state.  Each key must be a
     /// unique identifier, and the value represents the associated data.</param>
-    /// <returns></returns>
-    Task PopToRoot(params IEnumerable<(string Key, object Value)> args);
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it.</returns>
+    Task<bool> PopToRoot(params IEnumerable<(string Key, object Value)> args);
+
+
+    /// <summary>
+    /// <see cref="PopToRoot(IEnumerable{ValueTuple{string, object}})"/> with control over the interceptors.
+    /// </summary>
+    /// <param name="bypassInterceptors">Skips the registered <see cref="INavigationInterceptor"/>s.</param>
+    /// <param name="cancellationToken">Passed to the interceptors.</param>
+    /// <param name="args">Parameters to pass to the target.</param>
+    Task<bool> PopToRoot(
+        bool bypassInterceptors,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    );
     
     
     /// <summary>
@@ -95,8 +116,8 @@ public interface INavigator
     /// view or state.</remarks>
     /// <param name="args">A collection of key-value pairs representing parameters to pass to the target view or state.  Each key must be a
     /// unique identifier, and the value represents the associated data.</param>
-    /// <returns>A task that represents the asynchronous operation of navigating back.</returns>
-    Task GoBack(params IEnumerable<(string Key, object Value)> args);
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it.</returns>
+    Task<bool> GoBack(params IEnumerable<(string Key, object Value)> args);
     
     
     /// <summary>
@@ -108,8 +129,23 @@ public interface INavigator
     /// <param name="backCount">Allows you to go back 1 or more pages in the navigation stack. Defaults to 1.</param>
     /// <param name="args">A collection of key-value pairs representing parameters to pass to the target view or state.  Each key must be a
     /// unique identifier, and the value represents the associated data.</param>
-    /// <returns>A task that represents the asynchronous operation of navigating back.</returns>
-    Task GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args);
+    /// <returns>True when the navigation happened; false when an <see cref="INavigationInterceptor"/> cancelled it.</returns>
+    Task<bool> GoBack(int backCount = 1, params IEnumerable<(string Key, object Value)> args);
+
+
+    /// <summary>
+    /// <see cref="GoBack(int, IEnumerable{ValueTuple{string, object}})"/> with control over the interceptors.
+    /// </summary>
+    /// <param name="backCount">Allows you to go back 1 or more pages in the navigation stack.</param>
+    /// <param name="bypassInterceptors">Skips the registered <see cref="INavigationInterceptor"/>s.</param>
+    /// <param name="cancellationToken">Passed to the interceptors.</param>
+    /// <param name="args">Parameters to pass to the target.</param>
+    Task<bool> GoBack(
+        int backCount,
+        bool bypassInterceptors,
+        CancellationToken cancellationToken = default,
+        params IEnumerable<(string Key, object Value)> args
+    );
 
 
     /// <summary>
